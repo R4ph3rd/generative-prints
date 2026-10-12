@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Volcanic Sphere</title>
+<style>
+* { margin: 0; padding: 0; }
+body { background: #000; overflow: hidden; }
+canvas { display: block; }
+</style>
+</head>
+<body>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer }  from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass }      from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass }      from 'three/addons/postprocessing/OutputPass.js';
+
+// ── renderer ──────────────────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+document.body.appendChild(renderer.domElement);
+
+const scene  = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.01, 100);
+camera.position.z = 3.5;
+
+// HDR render target so lightning can emit values > 1 and bloom hard
+const pr = Math.min(devicePixelRatio, 2);
+const hdrTarget = new THREE.WebGLRenderTarget(innerWidth * pr, innerHeight * pr, {
+  minFilter: THREE.LinearFilter,
+  magFilter: THREE.LinearFilter,
+  type: THREE.HalfFloatType,
+});
+const composer = new EffectComposer(renderer, hdrTarget);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(
+  new THREE.Vector2(innerWidth, innerHeight),
+  1.5,   // strength
+  0.55,  // radius
+  0.28   // threshold — sphere body stays below, jets & lightning soar above
+));
+composer.addPass(new OutputPass());
+
+// ── simplex 3-D noise ─────────────────────────────────────────────────────────
+const NOISE = /* glsl */`
+  vec3 _m3(vec3 x){return x-floor(x*(1./289.))*289.;}
+  vec4 _m4(vec4 x){return x-floor(x*(1./289.))*289.;}
+  vec4 _p4(vec4 x){return _m4(((x*34.)+10.)*x);}
+  vec4 _ti(vec4 r){return 1.79284291400159-.85373472095314*r;}
+  float snoise(vec3 v){
+    const vec2 C=vec2(1./6.,1./3.);const vec4 D=vec4(0.,.5,1.,2.);
+    vec3 i=floor(v+dot(v,C.yyy));vec3 x0=v-i+dot(i,C.xxx);
+    vec3 g=step(x0.yzx,x0.xyz);vec3 l=1.-g;
+    vec3 i1=min(g.xyz,l.zxy);vec3 i2=max(g.xyz,l.zxy);
+    vec3 x1=x0-i1+C.xxx;vec3 x2=x0-i2+C.yyy;vec3 x3=x0-D.yyy;
+    i=_m3(i);
+    vec4 p=_p4(_p4(_p4(
+      i.z+vec4(0.,i1.z,i2.z,1.))+
+      i.y+vec4(0.,i1.y,i2.y,1.))+
+      i.x+vec4(0.,i1.x,i2.x,1.));
+    vec3 ns=0.142857142857*D.wyz-D.xzx;
+    vec4 j=p-49.*floor(p*ns.z*ns.z);
+    vec4 x_=floor(j*ns.z);vec4 y_=floor(j-7.*x_);
+    vec4 xa=x_*ns.x+ns.yyyy;vec4 ya=y_*ns.x+ns.yyyy;
+    vec4 h=1.-abs(xa)-abs(ya);
+    vec4 b0=vec4(xa.xy,ya.xy);vec4 b1=vec4(xa.zw,ya.zw);
+    vec4 s0=floor(b0)*2.+1.;vec4 s1=floor(b1)*2.+1.;
+    vec4 sh=-step(h,vec4(0.));
+    vec4 a0=b0.xzyw+s0.xzyw*sh.xxyy;vec4 a1=b1.xzyw+s1.xzyw*sh.zzww;
+    vec3 q0=vec3(a0.xy,h.x);vec3 q1=vec3(a0.zw,h.y);
+    vec3 q2=vec3(a1.xy,h.z);vec3 q3=vec3(a1.zw,h.w);
+    vec4 nr=_ti(vec4(dot(q0,q0),dot(q1,q1),dot(q2,q2),dot(q3,q3)));
+    q0*=nr.x;q1*=nr.y;q2*=nr.z;q3*=nr.w;
+    vec4 m=max(.6-vec4(dot(x0,x0),dot(x1,x1),dot(x2,x2),dot(x3,x3)),0.);m=m*m;
+    return 42.*dot(m*m,vec4(dot(q0,x0),dot(q1,x1),dot(q2,x2),dot(q3,x3)));
+  }
+`;
+
+// ── sphere (smooth — no fragment noise) ───────────────────────────────────────
+const sphereVert = NOISE + /* glsl */`
+  uniform float uTime;
+  varying vec3  vWorldPos;
+  varying vec3  vNorm;
+  varying float vDisp;
+  varying float vLat;
+
+  void main(){
+    vec3 n = normalize(position);
+    vLat = acos(clamp(n.y, -1., 1.));
+
+    // Minimal noise — just enough to break the perfect sphere subtly
+    float d0 = snoise(n * 2.0 + uTime * 0.07) * 0.040;
+    float d1 = snoise(n * 5.0 + uTime * 0.15) * 0.015;
+    float disp = d0 + d1;
+    vDisp = disp;
+
+    vec3 displaced = n * (1.0 + disp);
+    vec4 wp = modelMatrix * vec4(displaced, 1.0);
+    vWorldPos = wp.xyz;
+    // Analytic sphere normal (smooth regardless of displacement magnitude)
+    vNorm = normalize(normalMatrix * n);
+    gl_Position = projectionMatrix * viewMatrix * wp;
+  }
+`;
+
+// No texture/noise in fragment — pure smooth gradient + fresnel
+const sphereFrag = /* glsl */`
+  uniform float uTime;
+  varying vec3  vWorldPos;
+  varying vec3  vNorm;
+  varying float vDisp;
+  varying float vLat;
+
+  void main(){
+    bool  front   = gl_FrontFacing;
+    vec3  viewDir = normalize(cameraPosition - vWorldPos);
+    float NdotV   = abs(dot(normalize(vNorm), viewDir));
+    float fresnel = pow(1.0 - NdotV, 2.4);
+
+    // Warm/cool cycle (period ~22 s)
+    float ct      = sin(uTime * 0.11) * 0.5 + 0.5;
+    float latFac  = sin(vLat);  // 0 at poles, 1 at equator
+
+    // Warm palette: dark amber base → gold equator → orange rim
+    vec3 wPole    = vec3(0.12, 0.05, 0.02);
+    vec3 wEquator = vec3(0.55, 0.22, 0.04);
+    vec3 wRim     = vec3(1.00, 0.58, 0.08);
+
+    // Cool palette: deep navy base → ocean-blue equator → pink rim
+    float pinkMix = sin(vLat + uTime * 0.05) * 0.5 + 0.5;  // gentle pole/lat tint
+    vec3 cPole    = vec3(0.02, 0.06, 0.18);
+    vec3 cEquator = mix(vec3(0.06, 0.38, 0.72), vec3(0.58, 0.12, 0.48), pinkMix * 0.45);
+    vec3 cRim     = mix(vec3(0.10, 0.65, 1.00), vec3(0.92, 0.28, 0.68), pinkMix);
+
+    vec3 pole     = mix(wPole,    cPole,    ct);
+    vec3 equator  = mix(wEquator, cEquator, ct);
+    vec3 rim      = mix(wRim,     cRim,     ct);
+
+    // Smooth latitudinal gradient
+    vec3 base = mix(pole, equator, smoothstep(0.0, 1.0, latFac));
+
+    // Displacement hot-spots (very subtle surface highlights at vent bumps)
+    float heat = smoothstep(0.025, 0.055, vDisp);
+    vec3  hotW = vec3(1.00, 0.85, 0.30);
+    vec3  hotC = vec3(0.30, 0.90, 1.00);
+    base = mix(base, mix(hotW, hotC, ct), heat * 0.5);
+
+    // Fresnel rim glow (drives bloom on sphere edges)
+    base += rim * fresnel * 1.6;
+
+    if (!front) base = vec3(0.008, 0.008, 0.015);
+    float alpha = front ? mix(0.90, 0.36, fresnel) : 0.46;
+    gl_FragColor = vec4(base, alpha);
+  }
+`;
+
+const sphereMat = new THREE.ShaderMaterial({
+  uniforms: { uTime: { value: 0 } },
+  vertexShader: sphereVert,
+  fragmentShader: sphereFrag,
+  side: THREE.DoubleSide,
+  transparent: true,
+  depthWrite: false,
+});
+const sphereMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 200, 200), sphereMat);
+scene.add(sphereMesh);
+
+// ── solar prominence jets (Bezier arcs, flowing particle streams) ─────────────
+const N_JETS  = 24;
+const N_TRAIL = 80;
+const N_PROM  = N_JETS * N_TRAIL;
+
+const attrStart   = new Float32Array(N_PROM * 3);
+const attrEnd     = new Float32Array(N_PROM * 3);
+const attrCtrlH   = new Float32Array(N_PROM);
+const attrStagger = new Float32Array(N_PROM);
+const attrJetOff  = new Float32Array(N_PROM);
+const attrJetDur  = new Float32Array(N_PROM);
+const attrTravT   = new Float32Array(N_PROM);
+
+function randSphNorm() {
+  const th = Math.acos(2 * Math.random() - 1);
+  const ph = Math.random() * Math.PI * 2;
+  return new THREE.Vector3(Math.sin(th)*Math.cos(ph), Math.cos(th), Math.sin(th)*Math.sin(ph));
+}
+
+for (let j = 0; j < N_JETS; j++) {
+  const startN = randSphNorm();
+  const spread = 0.5 + Math.random() * 0.7;
+  const endN = new THREE.Vector3(
+    startN.x + (Math.random()-0.5)*spread,
+    startN.y + (Math.random()-0.5)*spread,
+    startN.z + (Math.random()-0.5)*spread
+  ).normalize();
+  const ctrlH  = 0.5 + Math.random() * 1.0;
+  const jetOff = Math.random() * 14.0;
+  const jetDur = 6.0 + Math.random() * 7.0;
+  const travT  = 1.8 + Math.random() * 2.5;
+  for (let p = 0; p < N_TRAIL; p++) {
+    const idx = j * N_TRAIL + p;
+    attrStart[idx*3]   = startN.x; attrStart[idx*3+1] = startN.y; attrStart[idx*3+2] = startN.z;
+    attrEnd[idx*3]     = endN.x;   attrEnd[idx*3+1]   = endN.y;   attrEnd[idx*3+2]   = endN.z;
+    attrCtrlH[idx]     = ctrlH;
+    attrStagger[idx]   = p / N_TRAIL;
+    attrJetOff[idx]    = jetOff;
+    attrJetDur[idx]    = jetDur;
+    attrTravT[idx]     = travT;
+  }
+}
+
+const jetGeo = new THREE.BufferGeometry();
+jetGeo.setAttribute('aStart',   new THREE.BufferAttribute(attrStart,   3));
+jetGeo.setAttribute('aEnd',     new THREE.BufferAttribute(attrEnd,     3));
+jetGeo.setAttribute('aCtrlH',   new THREE.BufferAttribute(attrCtrlH,   1));
+jetGeo.setAttribute('aStagger', new THREE.BufferAttribute(attrStagger, 1));
+jetGeo.setAttribute('aJetOff',  new THREE.BufferAttribute(attrJetOff,  1));
+jetGeo.setAttribute('aJetDur',  new THREE.BufferAttribute(attrJetDur,  1));
+jetGeo.setAttribute('aTravT',   new THREE.BufferAttribute(attrTravT,   1));
+
+const jetVert = /* glsl */`
+  attribute vec3  aStart; attribute vec3  aEnd;
+  attribute float aCtrlH; attribute float aStagger;
+  attribute float aJetOff; attribute float aJetDur; attribute float aTravT;
+  uniform float uTime; uniform float uColorT;
+  varying float vAlpha; varying vec3 vCol;
+
+  void main(){
+    float cycT = mod(uTime + aJetOff, aJetDur) / aJetDur;
+    float jetA = smoothstep(0.00,0.10,cycT)*smoothstep(0.55,0.45,cycT);
+    float arcT = fract(uTime / aTravT + aStagger);
+
+    vec3 midDir = normalize(aStart + aEnd);
+    vec3 ctrl   = midDir * (1.0 + aCtrlH);
+    float s = 1.0 - arcT;
+    vec3 pos = s*s*(aStart*1.03) + 2.*s*arcT*ctrl + arcT*arcT*(aEnd*1.03);
+
+    float arcA    = smoothstep(0.0,0.12,arcT)*smoothstep(1.0,0.82,arcT);
+    vAlpha        = arcA * jetA;
+    float peakF   = sin(arcT * 3.14159);
+    float retF    = smoothstep(0.55,1.0,arcT);
+    vec3 wLow=vec3(1.00,0.62,0.08);vec3 wPeak=vec3(1.00,0.95,0.60);vec3 wRet=vec3(0.95,0.28,0.05);
+    vec3 cLow=vec3(0.10,0.55,0.95);vec3 cPeak=vec3(0.60,0.95,1.00);vec3 cRet=vec3(0.90,0.25,0.65);
+    vec3 low=mix(wLow,cLow,uColorT);vec3 peak=mix(wPeak,cPeak,uColorT);vec3 ret=mix(wRet,cRet,uColorT);
+    vec3 col=mix(low,peak,peakF); col=mix(col,ret,retF*0.7);
+    vCol = col;
+    gl_PointSize = 2.0 + 2.8*peakF;
+    gl_Position  = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+  }
+`;
+const jetFrag = /* glsl */`
+  varying float vAlpha; varying vec3 vCol;
+  void main(){
+    float r=length(gl_PointCoord-.5); if(r>.5)discard;
+    float s=1.-r*2.;
+    gl_FragColor=vec4(vCol,s*s*vAlpha);
+  }
+`;
+const jetMat = new THREE.ShaderMaterial({
+  uniforms: { uTime:{value:0}, uColorT:{value:0} },
+  vertexShader: jetVert, fragmentShader: jetFrag,
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+});
+const jetPts = new THREE.Points(jetGeo, jetMat);
+sphereMesh.add(jetPts);  // rotates with sphere
+
+// ── ring point cloud — bigger, per-particle colour tilt, wind ─────────────────
+const RING_N = 22000;
+const rPos   = new Float32Array(RING_N * 3);
+const rRnd   = new Float32Array(RING_N);
+const rPhase = new Float32Array(RING_N);  // for per-particle colour hue offset
+
+for (let i = 0; i < RING_N; i++) {
+  const phi = Math.random() * Math.PI * 2;
+  const r   = 1.68 + Math.pow(Math.random(), 0.5) * 1.05;
+  const y   = (Math.random() - 0.5) * 0.24;
+  rPos[i*3] = Math.cos(phi)*r; rPos[i*3+1] = y; rPos[i*3+2] = Math.sin(phi)*r;
+  rRnd[i]   = Math.random();
+  rPhase[i] = Math.random() * Math.PI * 2;  // hue phase 0..2π
+}
+
+const ringGeo = new THREE.BufferGeometry();
+ringGeo.setAttribute('position', new THREE.BufferAttribute(rPos,   3));
+ringGeo.setAttribute('aRnd',     new THREE.BufferAttribute(rRnd,   1));
+ringGeo.setAttribute('aPhase',   new THREE.BufferAttribute(rPhase, 1));
+
+const ringVert = NOISE + /* glsl */`
+  attribute float aRnd;
+  attribute float aPhase;   // per-particle colour hue offset
+  uniform float   uTime;
+  uniform float   uColorT;
+  varying float   vAlpha;
+  varying vec3    vCol;
+
+  void main(){
+    vec3 p = position;
+
+    // Wind: two-octave noise field
+    float wt = uTime * 0.16;
+    float wx = snoise(vec3(p.x*.5, p.z*.5,       wt+aRnd*2.0)) * 0.20
+             + snoise(vec3(p.x*1.4,p.z*1.4,  uTime*.35+aRnd*5.)) * 0.06;
+    float wz = snoise(vec3(p.z*.5, p.x*.5+7.3,   wt+aRnd*2.0)) * 0.20
+             + snoise(vec3(p.z*1.4,p.x*1.4,  uTime*.35+aRnd*5.)) * 0.06;
+    float wy = snoise(vec3(p.x*.5+3.1, p.z*.5,   wt*.5))        * 0.08;
+    vec3 wp = p + vec3(wx, wy, wz);
+
+    float origR = length(p.xz);
+    float fade  = smoothstep(1.62,1.92,origR) * smoothstep(2.72,2.32,origR);
+    float twinkle = 0.55 + 0.45*sin(uTime*(1.2+aRnd*5.5)+aRnd*6.28);
+    float windDens = 0.5 + 0.5*length(vec2(wx,wz));
+    vAlpha = fade * twinkle * (0.22 + aRnd*0.78) * windDens;
+
+    // Per-particle colour tilt: cosine colour palette shifted by aPhase
+    // Covers blue → lilac → pink → warm-gold across the particle field
+    vec3 tiltBase = vec3(
+      0.55 + 0.35*cos(aPhase),
+      0.70 + 0.20*cos(aPhase + 2.094),
+      0.90 + 0.10*cos(aPhase + 4.189)
+    );
+    // Warm-phase overlay shifts the whole field toward gold-white
+    vec3 warmTilt = vec3(
+      0.80 + 0.20*cos(aPhase + 0.5),
+      0.82 + 0.15*cos(aPhase + 2.5),
+      0.55 + 0.30*cos(aPhase + 4.5)
+    );
+    vCol = mix(tiltBase, warmTilt, uColorT * 0.65);
+
+    vec4 mvp = modelViewMatrix * vec4(wp, 1.0);
+    gl_Position  = projectionMatrix * mvp;
+    // Bigger points — clearly visible as distinct dots
+    gl_PointSize = 3.2 + aRnd * 2.2;
+  }
+`;
+const ringFrag = /* glsl */`
+  varying float vAlpha; varying vec3 vCol;
+  void main(){
+    float r=length(gl_PointCoord-.5); if(r>.5)discard;
+    // Soft round disc
+    float soft = 1.0 - smoothstep(0.35, 0.5, r);
+    gl_FragColor = vec4(vCol, soft * vAlpha);
+  }
+`;
+const ringMat = new THREE.ShaderMaterial({
+  uniforms: { uTime:{value:0}, uColorT:{value:0} },
+  vertexShader: ringVert, fragmentShader: ringFrag,
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+});
+const ring = new THREE.Points(ringGeo, ringMat);
+ring.rotation.x = Math.PI * 0.16;
+scene.add(ring);
+
+// ── lightning bolts ───────────────────────────────────────────────────────────
+// Straight lines, max 2 angles (3 points = 2 segments).
+// Emitted as HDR (> 1.0) so they bloom heavily in the HalfFloat pipeline.
+// 60 % of bolts are near-vertical; 40 % are diagonal.
+
+function makeBoltGeo(vertical) {
+  let sx, sy, ex, ey;
+  if (vertical) {
+    // Near-vertical: top → bottom with slight horizontal drift
+    sx  = (Math.random() - 0.5) * 4.0;
+    sy  = 2.8 + Math.random() * 0.5;
+    ex  = sx + (Math.random() - 0.5) * 2.5;
+    ey  = -2.8 - Math.random() * 0.5;
+  } else {
+    // Diagonal: edge to opposite edge
+    sx  = (Math.random() < 0.5 ? -1 : 1) * (3.2 + Math.random() * 1.2);
+    sy  = (Math.random() - 0.5) * 4.5;
+    ex  = -sx * (0.6 + Math.random() * 0.7);
+    ey  = (Math.random() - 0.5) * 4.5;
+  }
+  const z  = (Math.random() - 0.5) * 0.6;
+  // One kink — placed 30-70 % along the bolt with a small perpendicular offset
+  const t  = 0.3 + Math.random() * 0.4;
+  const mx = sx + (ex-sx)*t + (Math.random()-0.5) * (vertical ? 0.5 : 0.3);
+  const my = sy + (ey-sy)*t + (Math.random()-0.5) * (vertical ? 0.2 : 0.4);
+  return new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(sx, sy, z),
+    new THREE.Vector3(mx, my, z),
+    new THREE.Vector3(ex, ey, z),
+  ]);
+}
+
+// ShaderMaterial emits HDR colour so bloom is very heavy
+function makeBoltMat() {
+  // Alternate warm/cool: 50 % blue-white, 30 % golden, 20 % pink
+  const r = Math.random();
+  let col;
+  if      (r < 0.5)  col = [2.2, 2.6, 4.0];   // electric blue-white
+  else if (r < 0.80) col = [3.5, 2.2, 0.4];   // golden
+  else               col = [3.0, 0.8, 2.8];   // magenta-pink
+  return new THREE.ShaderMaterial({
+    uniforms: { uOpacity: {value:0.0}, uColor: {value: new THREE.Vector3(...col)} },
+    vertexShader:  `void main(){ gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
+    fragmentShader:`uniform float uOpacity;uniform vec3 uColor;
+                    void main(){ gl_FragColor=vec4(uColor,uOpacity); }`,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+}
+
+const N_BOLTS = 6;
+const bolts = [];
+for (let i = 0; i < N_BOLTS; i++) {
+  const isVert = Math.random() < 0.6;
+  const line = new THREE.Line(makeBoltGeo(isVert), makeBoltMat());
+  scene.add(line);
+  bolts.push({ line, isVert, nextFlash: 2 + Math.random()*7, flashing:false, flashStart:0 });
+}
+
+// ── animation ─────────────────────────────────────────────────────────────────
+const clock = new THREE.Clock();
+const FLASH_DUR = 0.15;
+
+(function animate() {
+  requestAnimationFrame(animate);
+  const t  = clock.getElapsedTime();
+  const ct = Math.sin(t * 0.11) * 0.5 + 0.5;
+
+  sphereMat.uniforms.uTime.value = t;
+  sphereMesh.rotation.y = t * 0.20;
+  sphereMesh.rotation.x = Math.sin(t * 0.07) * 0.11;
+
+  jetMat.uniforms.uTime.value   = t;
+  jetMat.uniforms.uColorT.value = ct;
+
+  ringMat.uniforms.uTime.value   = t;
+  ringMat.uniforms.uColorT.value = ct;
+  ring.rotation.y = t * 0.052;
+
+  // Lightning
+  bolts.forEach(b => {
+    if (!b.flashing && t >= b.nextFlash) {
+      b.flashing   = true;
+      b.flashStart = t;
+      b.line.geometry.dispose();
+      b.line.geometry = makeBoltGeo(b.isVert);
+    }
+    if (b.flashing) {
+      const age = t - b.flashStart;
+      if (age < FLASH_DUR) {
+        const flicker = 0.4 + 0.6 * Math.abs(Math.sin(age * 220.0));
+        b.line.material.uniforms.uOpacity.value =
+          flicker * Math.pow(1.0 - age / FLASH_DUR, 1.2);
+      } else {
+        b.line.material.uniforms.uOpacity.value = 0;
+        b.flashing  = false;
+        b.nextFlash = t + 4 + Math.random() * 9;
+      }
+    }
+  });
+
+  composer.render();
+})();
+
+// ── resize ────────────────────────────────────────────────────────────────────
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+  hdrTarget.setSize(innerWidth * pr, innerHeight * pr);
+});
+</script>
+</body>
+</html>
