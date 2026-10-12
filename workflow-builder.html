@@ -1,0 +1,1499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Workflow Builder – AI Interface Pattern</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0d0f17;
+      --surface:   #151824;
+      --surface2:  #1e2235;
+      --surface3:  #272c44;
+      --border:    #2a3050;
+      --text:      #e1e7f5;
+      --muted:     #7a86a8;
+      --accent:    #5b7fff;
+      --radius:    10px;
+      --rsm:       6px;
+      --shadow:    0 8px 32px rgba(0,0,0,.55);
+    }
+
+    html, body, #root {
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 13px;
+      overflow: hidden;
+    }
+
+    /* ── App shell ──────────────────────────────────────────── */
+    .wf-app { display: flex; flex-direction: column; height: 100%; }
+
+    /* ── Toolbar ────────────────────────────────────────────── */
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 14px;
+      height: 48px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      z-index: 10;
+    }
+    .toolbar-brand { font-weight: 700; font-size: 15px; margin-right: 8px; display: flex; align-items: center; gap: 7px; }
+    .toolbar-brand-icon { font-size: 17px; }
+    .toolbar-divider { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
+    .toolbar-spacer { flex: 1; }
+    .tb-btn {
+      display: flex; align-items: center; gap: 5px;
+      padding: 5px 11px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--rsm);
+      color: var(--text);
+      font-size: 12px; font-weight: 500;
+      cursor: pointer;
+      transition: background .12s, border-color .12s;
+      white-space: nowrap;
+    }
+    .tb-btn:hover { background: var(--surface3); }
+    .tb-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .tb-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .tb-btn.primary:hover { opacity: .88; }
+    .tb-btn.danger  { background: #450a0a; border-color: #7f1d1d; color: #fca5a5; }
+    .tb-btn.danger:hover { background: #7f1d1d; }
+    .tb-btn:disabled { opacity: .38; cursor: not-allowed; }
+    .zoom-label { font-size: 12px; color: var(--muted); min-width: 40px; text-align: center; }
+
+    /* ── Main body ──────────────────────────────────────────── */
+    .wf-body { display: flex; flex: 1; overflow: hidden; position: relative; }
+
+    /* ── Left palette ───────────────────────────────────────── */
+    .palette {
+      width: 210px;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      z-index: 5;
+    }
+    .palette::-webkit-scrollbar { width: 4px; }
+    .palette::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    .palette-section { padding: 12px 10px 6px; }
+    .palette-heading {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .9px;
+      color: var(--muted);
+      padding: 0 4px 7px;
+    }
+    .palette-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 9px;
+      border-radius: var(--rsm);
+      cursor: grab;
+      user-select: none;
+      border: 1px solid transparent;
+      transition: background .12s, border-color .12s;
+      font-size: 12px;
+    }
+    .palette-item:hover { background: var(--surface2); border-color: var(--border); }
+    .palette-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .palette-item:active { cursor: grabbing; }
+    .pi-dot {
+      width: 8px; height: 8px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+    .pi-icon { font-size: 13px; flex-shrink: 0; }
+    .pi-label { font-size: 12px; font-weight: 500; }
+    .palette-hint {
+      padding: 10px 14px 14px;
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.5;
+      margin-top: auto;
+    }
+
+    /* ── Canvas ─────────────────────────────────────────────── */
+    .canvas-wrap {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      cursor: default;
+    }
+    .canvas-wrap.panning   { cursor: grabbing; }
+    .canvas-wrap.connecting { cursor: crosshair; }
+
+    /* subtle grid */
+    .canvas-wrap::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image:
+        radial-gradient(circle, #2a3050 1px, transparent 1px);
+      background-size: 28px 28px;
+      opacity: .5;
+      pointer-events: none;
+    }
+
+    .canvas-transform {
+      position: absolute;
+      top: 0; left: 0;
+      transform-origin: 0 0;
+      will-change: transform;
+    }
+
+    /* ── SVG connections ─────────────────────────────────────── */
+    .connections-svg {
+      position: absolute;
+      top: 0; left: 0;
+      overflow: visible;
+      pointer-events: none;
+    }
+    .conn-path {
+      fill: none;
+      stroke-width: 2;
+      pointer-events: stroke;
+      cursor: pointer;
+      transition: stroke .15s;
+    }
+    .conn-path:hover { stroke-width: 3; }
+    .conn-path.selected { stroke-width: 2.5; }
+    .conn-path.animated {
+      stroke-dasharray: 8 5;
+      animation: flowAnim .7s linear infinite;
+    }
+    @keyframes flowAnim { to { stroke-dashoffset: -13; } }
+    .draft-path { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 4; opacity: .7; pointer-events: none; }
+
+    /* ── Nodes ──────────────────────────────────────────────── */
+    .wf-node {
+      position: absolute;
+      width: 200px;
+      background: var(--surface2);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      cursor: grab;
+      user-select: none;
+      transition: border-color .15s, box-shadow .15s;
+      will-change: transform;
+    }
+    .wf-node:active  { cursor: grabbing; }
+    .wf-node.selected {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(91,127,255,.2);
+    }
+    .wf-node.status-running { border-color: #fbbf24; box-shadow: 0 0 0 3px rgba(251,191,36,.15); }
+    .wf-node.status-success { border-color: #34d399; box-shadow: 0 0 0 3px rgba(52,211,153,.12); }
+    .wf-node.status-error   { border-color: #f87171; box-shadow: 0 0 0 3px rgba(248,113,113,.15); }
+    .wf-node:focus-visible  { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    .node-header {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 9px 11px 7px;
+      border-bottom: 1px solid var(--border);
+      border-radius: var(--radius) var(--radius) 0 0;
+    }
+    .node-type-icon { font-size: 14px; }
+    .node-label { font-weight: 600; font-size: 12px; flex: 1; }
+    .node-status-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      transition: background .2s;
+    }
+    .node-body {
+      padding: 7px 11px 9px;
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.4;
+      min-height: 28px;
+    }
+    .node-body strong { color: var(--text); }
+
+    /* color accent on left edge */
+    .wf-node::before {
+      content: '';
+      position: absolute;
+      left: 0; top: 8px; bottom: 8px;
+      width: 3px;
+      border-radius: 2px;
+      background: var(--node-color, var(--border));
+    }
+
+    /* ── Ports ──────────────────────────────────────────────── */
+    .port-group {
+      position: absolute;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      top: 0;
+      bottom: 0;
+      justify-content: center;
+    }
+    .port-group.inputs  { left: -8px; }
+    .port-group.outputs { right: -8px; }
+
+    .port {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 0;
+      cursor: crosshair;
+    }
+    .port.output { flex-direction: row-reverse; }
+
+    .port-dot {
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      background: var(--surface3);
+      border: 2px solid var(--border);
+      transition: background .12s, border-color .12s, transform .1s;
+      flex-shrink: 0;
+      position: relative;
+      z-index: 2;
+    }
+    .port-dot:hover, .port-dot.connectable {
+      background: var(--accent);
+      border-color: var(--accent);
+      transform: scale(1.3);
+    }
+    .port-label {
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: .4px;
+      text-transform: uppercase;
+      color: var(--muted);
+      line-height: 1;
+    }
+    .port.port-true  .port-dot { border-color: #34d399; }
+    .port.port-false .port-dot { border-color: #f87171; }
+    .port.port-true  .port-label { color: #34d399; }
+    .port.port-false .port-label { color: #f87171; }
+
+    /* status dot colors */
+    .sd-idle    { background: var(--border); }
+    .sd-running { background: #fbbf24; animation: pulse 1s ease infinite; }
+    .sd-success { background: #34d399; }
+    .sd-error   { background: #f87171; }
+    @keyframes pulse { 0%,100%{opacity:1}50%{opacity:.4} }
+
+    /* ── Config panel ───────────────────────────────────────── */
+    .config-panel {
+      width: 268px;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      overflow-y: auto;
+      z-index: 5;
+      animation: slideIn .18s ease;
+    }
+    @keyframes slideIn { from { transform: translateX(20px); opacity: 0; } }
+    .config-panel::-webkit-scrollbar { width: 4px; }
+    .config-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .cp-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 14px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .cp-icon { font-size: 15px; }
+    .cp-title { font-weight: 600; font-size: 13px; flex: 1; }
+    .cp-close {
+      background: none; border: none;
+      color: var(--muted); font-size: 16px;
+      cursor: pointer; padding: 2px 4px;
+      border-radius: 4px;
+      line-height: 1;
+    }
+    .cp-close:hover { color: var(--text); background: var(--surface2); }
+    .cp-close:focus-visible { outline: 2px solid var(--accent); }
+
+    .cp-section { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+    .cp-section-title {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .8px;
+      color: var(--muted);
+      margin-bottom: 9px;
+    }
+
+    .cp-field { margin-bottom: 10px; }
+    .cp-label { font-size: 11px; color: var(--muted); margin-bottom: 4px; display: block; }
+    .cp-input, .cp-select, .cp-textarea {
+      width: 100%;
+      padding: 6px 9px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--rsm);
+      color: var(--text);
+      font-size: 12px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color .12s;
+    }
+    .cp-input:focus, .cp-select:focus, .cp-textarea:focus { border-color: var(--accent); }
+    .cp-textarea { resize: vertical; min-height: 64px; }
+    .cp-select option { background: var(--surface2); }
+
+    .cp-status-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    .status-pill {
+      padding: 3px 9px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 500;
+    }
+    .sp-idle    { background: var(--surface3); color: var(--muted); }
+    .sp-running { background: #451a03;  color: #fbbf24; }
+    .sp-success { background: #064e3b;  color: #34d399; }
+    .sp-error   { background: #450a0a;  color: #f87171; }
+
+    /* ── Mini-map ────────────────────────────────────────────── */
+    .minimap {
+      position: absolute;
+      bottom: 16px;
+      right: 16px;
+      width: 160px;
+      height: 100px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--rsm);
+      overflow: hidden;
+      z-index: 20;
+      box-shadow: var(--shadow);
+    }
+    .minimap svg { width: 100%; height: 100%; }
+    .mm-viewport {
+      fill: none;
+      stroke: var(--accent);
+      stroke-width: 1.5;
+      opacity: .5;
+    }
+
+    /* ── Drop ghost ──────────────────────────────────────────── */
+    .drop-ghost {
+      position: fixed;
+      pointer-events: none;
+      z-index: 9999;
+      opacity: .75;
+      transform: translate(-50%, -50%);
+      background: var(--surface3);
+      border: 1.5px dashed var(--accent);
+      border-radius: var(--rsm);
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+      box-shadow: var(--shadow);
+    }
+
+    /* ── Context menu ────────────────────────────────────────── */
+    .ctx-menu {
+      position: fixed;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--rsm);
+      box-shadow: var(--shadow);
+      z-index: 100;
+      min-width: 160px;
+      overflow: hidden;
+      animation: popIn .1s ease;
+    }
+    @keyframes popIn { from { transform: scale(.95); opacity: 0; } }
+    .ctx-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: background .1s;
+    }
+    .ctx-item:hover { background: var(--surface2); }
+    .ctx-item.danger { color: #f87171; }
+    .ctx-item.danger:hover { background: #450a0a; }
+    .ctx-divider { height: 1px; background: var(--border); }
+
+    /* ── Empty state ─────────────────────────────────────────── */
+    .canvas-empty {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      pointer-events: none;
+      opacity: .5;
+    }
+    .canvas-empty-icon { font-size: 40px; }
+    .canvas-empty-text { font-size: 14px; color: var(--muted); }
+
+    /* ── Misc ────────────────────────────────────────────────── */
+    .sr-only { position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0; }
+
+    button { font-family: inherit; }
+    select { font-family: inherit; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Constants & node type registry
+═══════════════════════════════════════════════════════════════════════════ */
+const NODE_W = 200;
+
+const NODE_TYPES = {
+  // Triggers
+  manual:    { cat:'Triggers', icon:'▶',  label:'Manual Trigger',  color:'#f59e0b', outputs:['out'] },
+  webhook:   { cat:'Triggers', icon:'⚡', label:'Webhook',         color:'#f59e0b', outputs:['out'] },
+  schedule:  { cat:'Triggers', icon:'🕐', label:'Schedule',        color:'#f59e0b', outputs:['out'] },
+  email_in:  { cat:'Triggers', icon:'📥', label:'Email Received',  color:'#f59e0b', outputs:['out'] },
+  // AI
+  llm:       { cat:'AI',       icon:'✦',  label:'AI: Generate',    color:'#a855f7', outputs:['out'] },
+  classify:  { cat:'AI',       icon:'🏷', label:'AI: Classify',    color:'#a855f7', outputs:['out'] },
+  extract:   { cat:'AI',       icon:'🔍', label:'AI: Extract',     color:'#a855f7', outputs:['out'] },
+  summarize: { cat:'AI',       icon:'📝', label:'AI: Summarize',   color:'#a855f7', outputs:['out'] },
+  // Actions
+  http:      { cat:'Actions',  icon:'🌐', label:'HTTP Request',    color:'#3b82f6', outputs:['out'] },
+  email_out: { cat:'Actions',  icon:'✉',  label:'Send Email',      color:'#3b82f6', outputs:['out'] },
+  db_write:  { cat:'Actions',  icon:'🗄', label:'Save to DB',      color:'#3b82f6', outputs:['out'] },
+  transform: { cat:'Actions',  icon:'⚙',  label:'Transform Data',  color:'#3b82f6', outputs:['out'] },
+  // Logic
+  if_else:   { cat:'Logic',    icon:'⑂',  label:'If / Else',       color:'#10b981', outputs:['True','False'] },
+  loop:      { cat:'Logic',    icon:'↺',  label:'Loop',            color:'#10b981', outputs:['Item','Done'] },
+  wait:      { cat:'Logic',    icon:'⏳', label:'Wait',            color:'#10b981', outputs:['out'] },
+  merge:     { cat:'Logic',    icon:'⊕',  label:'Merge',           color:'#10b981', outputs:['out'] },
+};
+
+const CATEGORIES = ['Triggers','AI','Actions','Logic'];
+
+/* Node height: taller for multi-output */
+function nodeH(type) {
+  const outs = NODE_TYPES[type]?.outputs ?? ['out'];
+  return outs.length > 1 ? 90 : 68;
+}
+
+/* Port position in world space */
+function portPos(node, portName, isInput) {
+  const h = nodeH(node.type);
+  if (isInput) return { x: node.x, y: node.y + h / 2 };
+  const outs = NODE_TYPES[node.type]?.outputs ?? ['out'];
+  if (outs.length === 1) return { x: node.x + NODE_W, y: node.y + h / 2 };
+  const idx = outs.indexOf(portName);
+  const step = h / (outs.length + 1);
+  return { x: node.x + NODE_W, y: node.y + step * (idx + 1) };
+}
+
+/* Bezier path between two points */
+function bezier(sx, sy, tx, ty) {
+  const cp = Math.max(Math.abs(tx - sx) * 0.55, 60);
+  return `M${sx},${sy} C${sx+cp},${sy} ${tx-cp},${ty} ${tx},${ty}`;
+}
+
+/* Unique ID */
+function uid() { return Math.random().toString(36).slice(2, 9); }
+
+/* Connection color */
+function connColor(portName, status) {
+  if (status === 'running') return '#fbbf24';
+  if (status === 'success') return '#34d399';
+  if (status === 'error')   return '#f87171';
+  if (portName === 'True')  return '#34d399';
+  if (portName === 'False') return '#f87171';
+  return '#3b4a72';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Initial demo workflow
+═══════════════════════════════════════════════════════════════════════════ */
+const INIT_NODES = [
+  { id:'n1', type:'manual',   x:60,  y:180, label:'Start',         config:{ name:'Manual Trigger' } },
+  { id:'n2', type:'extract',  x:330, y:180, label:'Extract Data',  config:{ prompt:'Extract name, email, intent from message', model:'claude-3' } },
+  { id:'n3', type:'if_else',  x:600, y:165, label:'High Confidence?', config:{ condition:'confidence > 0.85', description:'Route by confidence score' } },
+  { id:'n4', type:'email_out',x:880, y:90,  label:'Send Reply',    config:{ to:'{{email}}', subject:'Re: Your request', body:'Auto-generated reply' } },
+  { id:'n5', type:'db_write', x:880, y:255, label:'Log & Review',  config:{ table:'pending_reviews', operation:'INSERT' } },
+];
+const INIT_CONNS = [
+  { id:'e1', src:'n1', srcPort:'out',   tgt:'n2', tgtPort:'in' },
+  { id:'e2', src:'n2', srcPort:'out',   tgt:'n3', tgtPort:'in' },
+  { id:'e3', src:'n3', srcPort:'True',  tgt:'n4', tgtPort:'in' },
+  { id:'e4', src:'n3', srcPort:'False', tgt:'n5', tgtPort:'in' },
+];
+
+/* Node default config values */
+function defaultConfig(type) {
+  const map = {
+    manual:    { name:'Manual Trigger' },
+    webhook:   { path:'/webhook', method:'POST', auth:'none' },
+    schedule:  { cron:'0 9 * * 1-5', timezone:'UTC', description:'Weekdays 9am' },
+    email_in:  { from:'', subject_filter:'', folder:'INBOX' },
+    llm:       { prompt:'', model:'claude-3-sonnet', temperature:'0.7', max_tokens:'1024' },
+    classify:  { prompt:'Classify this input', labels:'positive,negative,neutral', model:'claude-3-haiku' },
+    extract:   { prompt:'Extract structured data', model:'claude-3-sonnet', output_format:'json' },
+    summarize: { prompt:'Summarize the following', model:'claude-3-haiku', max_length:'200' },
+    http:      { url:'https://', method:'GET', headers:'{}', body:'' },
+    email_out: { to:'', subject:'', body:'', from:'noreply@example.com' },
+    db_write:  { table:'', operation:'INSERT', fields:'{}' },
+    transform: { code:'// transform(data)\nreturn data;', language:'javascript' },
+    if_else:   { condition:'', description:'' },
+    loop:      { over:'{{items}}', max_iterations:'100' },
+    wait:      { duration:'5', unit:'seconds' },
+    merge:     { strategy:'merge', on_conflict:'last-wins' },
+  };
+  return map[type] ?? {};
+}
+
+/* Config field definitions */
+function configFields(type) {
+  const fields = {
+    manual:    [{ key:'name', label:'Name', type:'text' }],
+    webhook:   [{ key:'path', label:'Path', type:'text' },{ key:'method', label:'Method', type:'select', options:['GET','POST','PUT','PATCH'] },{ key:'auth', label:'Auth', type:'select', options:['none','bearer','api-key'] }],
+    schedule:  [{ key:'cron', label:'Cron expression', type:'text' },{ key:'timezone', label:'Timezone', type:'text' },{ key:'description', label:'Description', type:'text' }],
+    email_in:  [{ key:'from', label:'From filter', type:'text' },{ key:'subject_filter', label:'Subject filter', type:'text' },{ key:'folder', label:'Folder', type:'text' }],
+    llm:       [{ key:'prompt', label:'Prompt', type:'textarea' },{ key:'model', label:'Model', type:'select', options:['claude-3-opus','claude-3-sonnet','claude-3-haiku'] },{ key:'temperature', label:'Temperature', type:'text' },{ key:'max_tokens', label:'Max tokens', type:'text' }],
+    classify:  [{ key:'prompt', label:'Instructions', type:'textarea' },{ key:'labels', label:'Labels (comma-separated)', type:'text' },{ key:'model', label:'Model', type:'select', options:['claude-3-haiku','claude-3-sonnet'] }],
+    extract:   [{ key:'prompt', label:'What to extract', type:'textarea' },{ key:'model', label:'Model', type:'select', options:['claude-3-sonnet','claude-3-haiku'] },{ key:'output_format', label:'Output format', type:'select', options:['json','text','markdown'] }],
+    summarize: [{ key:'prompt', label:'Instructions', type:'textarea' },{ key:'model', label:'Model', type:'select', options:['claude-3-haiku','claude-3-sonnet'] },{ key:'max_length', label:'Max length (words)', type:'text' }],
+    http:      [{ key:'url', label:'URL', type:'text' },{ key:'method', label:'Method', type:'select', options:['GET','POST','PUT','DELETE','PATCH'] },{ key:'headers', label:'Headers (JSON)', type:'textarea' },{ key:'body', label:'Body', type:'textarea' }],
+    email_out: [{ key:'to', label:'To', type:'text' },{ key:'subject', label:'Subject', type:'text' },{ key:'body', label:'Body', type:'textarea' },{ key:'from', label:'From', type:'text' }],
+    db_write:  [{ key:'table', label:'Table', type:'text' },{ key:'operation', label:'Operation', type:'select', options:['INSERT','UPDATE','UPSERT','DELETE'] },{ key:'fields', label:'Field mapping (JSON)', type:'textarea' }],
+    transform: [{ key:'code', label:'Transform code', type:'textarea' },{ key:'language', label:'Language', type:'select', options:['javascript','python'] }],
+    if_else:   [{ key:'condition', label:'Condition', type:'text' },{ key:'description', label:'Description', type:'text' }],
+    loop:      [{ key:'over', label:'Iterate over', type:'text' },{ key:'max_iterations', label:'Max iterations', type:'text' }],
+    wait:      [{ key:'duration', label:'Duration', type:'text' },{ key:'unit', label:'Unit', type:'select', options:['milliseconds','seconds','minutes'] }],
+    merge:     [{ key:'strategy', label:'Strategy', type:'select', options:['merge','concat','first','last'] },{ key:'on_conflict', label:'On conflict', type:'select', options:['first-wins','last-wins','error'] }],
+  };
+  return fields[type] ?? [];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Sub-components
+═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── ConnectionPath ────────────────────────────────────────── */
+function ConnectionPath({ conn, nodes, status, selected, onClick }) {
+  const src = nodes.find(n => n.id === conn.src);
+  const tgt = nodes.find(n => n.id === conn.tgt);
+  if (!src || !tgt) return null;
+  const sp = portPos(src, conn.srcPort, false);
+  const tp = portPos(tgt, conn.tgtPort, true);
+  const color = connColor(conn.srcPort, status);
+  const isFlow = status === 'running' || status === 'success';
+  return (
+    <path
+      className={`conn-path ${selected ? 'selected' : ''} ${isFlow ? 'animated' : ''}`}
+      d={bezier(sp.x, sp.y, tp.x, tp.y)}
+      stroke={color}
+      strokeOpacity={selected ? 1 : 0.65}
+      onClick={e => { e.stopPropagation(); onClick(conn.id); }}
+      aria-label={`Connection from ${src.label ?? src.type} to ${tgt.label ?? tgt.type}`}
+      tabIndex={0}
+      onKeyDown={e => e.key === 'Enter' && onClick(conn.id)}
+      style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
+    />
+  );
+}
+
+/* ── WorkflowNode ──────────────────────────────────────────── */
+function WorkflowNode({
+  node, selected, status,
+  onMouseDown, onPortMouseDown, onPortMouseUp, onPortMouseEnter, onPortMouseLeave,
+  onKeyDown, connectingFrom, isConnectable,
+}) {
+  const def = NODE_TYPES[node.type] ?? { icon:'🔧', label:'Unknown', color:'#888', outputs:['out'] };
+  const h   = nodeH(node.type);
+  const statusClass = status !== 'idle' ? `status-${status}` : '';
+
+  const statusColors = { idle:'#3b4a72', running:'#fbbf24', success:'#34d399', error:'#f87171' };
+
+  return (
+    <div
+      className={`wf-node ${selected ? 'selected' : ''} ${statusClass}`}
+      style={{
+        left: node.x,
+        top: node.y,
+        height: h,
+        '--node-color': def.color,
+      }}
+      onMouseDown={e => onMouseDown(e, node.id)}
+      onKeyDown={e => onKeyDown(e, node.id)}
+      tabIndex={0}
+      role="button"
+      aria-label={`${def.label} node: ${node.label ?? def.label}. Status: ${status}.`}
+      aria-selected={selected}
+    >
+      {/* Header */}
+      <div className="node-header">
+        <span className="node-type-icon" aria-hidden="true">{def.icon}</span>
+        <span className="node-label">{node.label ?? def.label}</span>
+        <div
+          className={`node-status-dot sd-${status}`}
+          style={{ background: statusColors[status] }}
+          role="status"
+          aria-label={`Status: ${status}`}
+        />
+      </div>
+
+      {/* Body */}
+      <div className="node-body">
+        {node.config?.condition
+          ? <span>If: <strong>{node.config.condition}</strong></span>
+          : node.config?.prompt
+          ? <span style={{ fontStyle:'italic', overflow:'hidden', display:'-webkit-box', WebkitLineClamp:1, WebkitBoxOrient:'vertical' }}>{node.config.prompt}</span>
+          : <span style={{ color:'#3b4a72' }}>{def.cat}</span>
+        }
+      </div>
+
+      {/* Input port (left) — triggers have no input */}
+      {def.cat !== 'Triggers' && (
+        <div className="port-group inputs" style={{ left:-8, height:'100%', position:'absolute', display:'flex', alignItems:'center', top:0 }}>
+          <div
+            className={`port input`}
+            title="Input"
+            onMouseDown={e => e.stopPropagation()}
+            onMouseUp={e => { e.stopPropagation(); onPortMouseUp(e, node.id, 'in'); }}
+            onMouseEnter={() => onPortMouseEnter(node.id, 'in', true)}
+            onMouseLeave={() => onPortMouseLeave()}
+          >
+            <div
+              className={`port-dot ${isConnectable ? 'connectable' : ''}`}
+              style={connectingFrom ? { cursor:'crosshair' } : {}}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Output ports (right) */}
+      <div
+        className="port-group outputs"
+        style={{ position:'absolute', right:-8, height:'100%', top:0, display:'flex', flexDirection:'column', justifyContent:'space-evenly', alignItems:'flex-end', padding:'14px 0' }}
+      >
+        {def.outputs.map(portName => (
+          <div
+            key={portName}
+            className={`port output port-${portName.toLowerCase()}`}
+            title={portName}
+            onMouseDown={e => { e.stopPropagation(); onPortMouseDown(e, node.id, portName); }}
+          >
+            {def.outputs.length > 1 && (
+              <span className="port-label">{portName}</span>
+            )}
+            <div className="port-dot" style={{ cursor:'crosshair' }} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ── ConfigPanel ───────────────────────────────────────────── */
+function ConfigPanel({ node, status, onChange, onClose, onDelete }) {
+  const def    = NODE_TYPES[node.type] ?? { icon:'🔧', label:'Unknown' };
+  const fields = configFields(node.type);
+
+  return (
+    <aside className="config-panel" aria-label="Node configuration">
+      <div className="cp-header">
+        <span className="cp-icon" aria-hidden="true">{def.icon}</span>
+        <span className="cp-title">{def.label}</span>
+        <button className="cp-close" onClick={onClose} aria-label="Close panel" title="Close">×</button>
+      </div>
+
+      <div className="cp-section">
+        <div className="cp-section-title">Identity</div>
+        <div className="cp-field">
+          <label className="cp-label">Node name</label>
+          <input
+            className="cp-input"
+            value={node.label ?? def.label}
+            onChange={e => onChange('label', e.target.value)}
+            aria-label="Node name"
+          />
+        </div>
+        <div className="cp-status-row">
+          <span style={{ color:'var(--muted)', fontSize:11 }}>Status</span>
+          <span className={`status-pill sp-${status}`}>{status}</span>
+        </div>
+      </div>
+
+      {fields.length > 0 && (
+        <div className="cp-section">
+          <div className="cp-section-title">Configuration</div>
+          {fields.map(f => (
+            <div className="cp-field" key={f.key}>
+              <label className="cp-label" htmlFor={`cfg-${f.key}`}>{f.label}</label>
+              {f.type === 'textarea' ? (
+                <textarea
+                  id={`cfg-${f.key}`}
+                  className="cp-textarea"
+                  value={node.config?.[f.key] ?? ''}
+                  onChange={e => onChange(`config.${f.key}`, e.target.value)}
+                  rows={3}
+                />
+              ) : f.type === 'select' ? (
+                <select
+                  id={`cfg-${f.key}`}
+                  className="cp-select"
+                  value={node.config?.[f.key] ?? ''}
+                  onChange={e => onChange(`config.${f.key}`, e.target.value)}
+                >
+                  {f.options.map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+              ) : (
+                <input
+                  id={`cfg-${f.key}`}
+                  className="cp-input"
+                  value={node.config?.[f.key] ?? ''}
+                  onChange={e => onChange(`config.${f.key}`, e.target.value)}
+                />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="cp-section">
+        <div className="cp-section-title">Node info</div>
+        <div style={{ fontSize:11, color:'var(--muted)', lineHeight:1.6 }}>
+          <div>Type: <strong style={{ color:'var(--text)' }}>{def.cat}</strong></div>
+          <div>ID: <code style={{ fontFamily:'monospace', fontSize:10 }}>{node.id}</code></div>
+          <div>Outputs: <strong style={{ color:'var(--text)' }}>{(NODE_TYPES[node.type]?.outputs ?? ['out']).join(', ')}</strong></div>
+        </div>
+      </div>
+
+      <div className="cp-section">
+        <button
+          className="tb-btn danger"
+          style={{ width:'100%', justifyContent:'center' }}
+          onClick={onDelete}
+        >
+          🗑 Delete node
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+/* ── MiniMap ───────────────────────────────────────────────── */
+function MiniMap({ nodes, connections, pan, zoom, canvasSize }) {
+  const MM_W = 160, MM_H = 100;
+  if (!nodes.length) return null;
+
+  const allX = nodes.map(n => [n.x, n.x + NODE_W]).flat();
+  const allY = nodes.map(n => [n.y, n.y + nodeH(n.type)]).flat();
+  const minX = Math.min(...allX) - 40, maxX = Math.max(...allX) + 40;
+  const minY = Math.min(...allY) - 40, maxY = Math.max(...allY) + 40;
+  const ww   = maxX - minX, wh = maxY - minY;
+  const scale = Math.min(MM_W / ww, MM_H / wh, 1);
+
+  const toMM = (wx, wy) => ({
+    x: (wx - minX) * scale,
+    y: (wy - minY) * scale,
+  });
+
+  // Viewport rect in world space
+  const vpX = (-pan.x) / zoom;
+  const vpY = (-pan.y) / zoom;
+  const vpW = canvasSize.w / zoom;
+  const vpH = canvasSize.h / zoom;
+  const vp  = toMM(vpX, vpY);
+
+  return (
+    <div className="minimap" aria-label="Minimap" role="img">
+      <svg viewBox={`0 0 ${MM_W} ${MM_H}`} aria-hidden="true">
+        {connections.map(c => {
+          const s = nodes.find(n => n.id === c.src);
+          const t = nodes.find(n => n.id === c.tgt);
+          if (!s || !t) return null;
+          const sp = portPos(s, c.srcPort, false);
+          const tp = portPos(t, c.tgtPort, true);
+          const ms = toMM(sp.x, sp.y), mt = toMM(tp.x, tp.y);
+          return <path key={c.id} d={bezier(ms.x, ms.y, mt.x, mt.y)} stroke="#3b4a72" strokeWidth={1} fill="none" />;
+        })}
+        {nodes.map(n => {
+          const def  = NODE_TYPES[n.type];
+          const pos  = toMM(n.x, n.y);
+          const nw   = NODE_W * scale, nh = nodeH(n.type) * scale;
+          return (
+            <rect
+              key={n.id}
+              x={pos.x} y={pos.y} width={Math.max(nw, 8)} height={Math.max(nh, 5)}
+              rx={2}
+              fill={def?.color ?? '#888'}
+              opacity={.7}
+            />
+          );
+        })}
+        {/* Viewport indicator */}
+        <rect
+          className="mm-viewport"
+          x={vp.x} y={vp.y}
+          width={vpW * scale} height={vpH * scale}
+        />
+      </svg>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Main WorkflowBuilder
+═══════════════════════════════════════════════════════════════════════════ */
+function WorkflowBuilder() {
+  const [nodes,       setNodes]      = useState(INIT_NODES);
+  const [conns,       setConns]      = useState(INIT_CONNS);
+  const [selected,    setSelected]   = useState(null);   // { kind:'node'|'conn', id }
+  const [pan,         setPan]        = useState({ x: 80, y: 40 });
+  const [zoom,        setZoom]       = useState(0.95);
+  const [nodeStatus,  setNodeStatus] = useState({});     // { nodeId: 'idle'|'running'|'success'|'error' }
+  const [connStatus,  setConnStatus] = useState({});     // { connId: 'idle'|'running'|'success' }
+  const [running,     setRunning]    = useState(false);
+  const [draftConn,   setDraftConn]  = useState(null);   // { srcNodeId, srcPort, x, y }
+  const [paletteDrag, setPalDrag]    = useState(null);   // { type, clientX, clientY }
+  const [ctxMenu,     setCtxMenu]    = useState(null);   // { x, y, nodeId? }
+  const [canvasSize,  setCanvasSize] = useState({ w:800, h:600 });
+  const [hoveredPort, setHoveredPort]= useState(null);   // { nodeId, port, isInput }
+
+  const canvasRef   = useRef(null);
+  const dragRef     = useRef(null);  // { type:'node'|'pan', ...state } during drag
+  const abortRef    = useRef(false);
+
+  /* Track canvas size */
+  useEffect(() => {
+    const obs = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      setCanvasSize({ w: width, h: height });
+    });
+    if (canvasRef.current) obs.observe(canvasRef.current);
+    return () => obs.disconnect();
+  }, []);
+
+  /* World-space coords from client coords */
+  const toWorld = useCallback((cx, cy) => {
+    const rect = canvasRef.current?.getBoundingClientRect() ?? { left:0, top:0 };
+    return {
+      x: (cx - rect.left - pan.x) / zoom,
+      y: (cy - rect.top  - pan.y) / zoom,
+    };
+  }, [pan, zoom]);
+
+  /* ── Canvas mouse events ─────────────────────────────────── */
+  const onCanvasMouseDown = useCallback((e) => {
+    if (e.button !== 0 && e.button !== 1) return;
+    if (e.target.closest('.wf-node, .port-dot, .port')) return;
+    setCtxMenu(null);
+    setSelected(null);
+    const startPan = { ...pan };
+    dragRef.current = { type:'pan', startX: e.clientX, startY: e.clientY, startPan };
+    e.preventDefault();
+  }, [pan]);
+
+  const onCanvasMouseMove = useCallback((e) => {
+    const dr = dragRef.current;
+    if (!dr) {
+      // Update draft connection endpoint
+      if (draftConn) {
+        const w = toWorld(e.clientX, e.clientY);
+        setDraftConn(dc => dc ? { ...dc, x: w.x, y: w.y } : null);
+      }
+      return;
+    }
+    if (dr.type === 'pan') {
+      const dx = e.clientX - dr.startX;
+      const dy = e.clientY - dr.startY;
+      setPan({ x: dr.startPan.x + dx, y: dr.startPan.y + dy });
+    } else if (dr.type === 'node') {
+      const wx = (e.clientX - dr.canvasLeft - pan.x) / zoom - dr.offX;
+      const wy = (e.clientY - dr.canvasTop  - pan.y) / zoom - dr.offY;
+      setNodes(ns => ns.map(n => n.id === dr.nodeId ? { ...n, x: wx, y: wy } : n));
+    }
+  }, [draftConn, pan, zoom, toWorld]);
+
+  const onCanvasMouseUp = useCallback((e) => {
+    dragRef.current = null;
+    if (draftConn) {
+      // check if we dropped on a compatible input port
+      const w = toWorld(e.clientX, e.clientY);
+      let found = null;
+      for (const node of nodes) {
+        if (node.id === draftConn.srcNodeId) continue;
+        const def = NODE_TYPES[node.type];
+        if (def?.cat === 'Triggers') continue;
+        const p = portPos(node, 'in', true);
+        if (Math.hypot(w.x - p.x, w.y - p.y) < 18) {
+          found = node.id;
+          break;
+        }
+      }
+      if (found) {
+        // Avoid duplicate connections
+        const dup = conns.find(c => c.src === draftConn.srcNodeId && c.srcPort === draftConn.srcPort && c.tgt === found);
+        if (!dup) {
+          setConns(cs => [...cs, { id: uid(), src: draftConn.srcNodeId, srcPort: draftConn.srcPort, tgt: found, tgtPort: 'in' }]);
+        }
+      }
+      setDraftConn(null);
+    }
+  }, [draftConn, nodes, conns, toWorld]);
+
+  /* ── Node events ─────────────────────────────────────────── */
+  const onNodeMouseDown = useCallback((e, nodeId) => {
+    if (e.button !== 0) return;
+    if (e.target.closest('.port-dot, .port')) return;
+    e.stopPropagation();
+    setCtxMenu(null);
+    setSelected({ kind:'node', id: nodeId });
+    const rect = canvasRef.current.getBoundingClientRect();
+    const node = nodes.find(n => n.id === nodeId);
+    const wx = (e.clientX - rect.left - pan.x) / zoom;
+    const wy = (e.clientY - rect.top  - pan.y) / zoom;
+    dragRef.current = {
+      type: 'node',
+      nodeId,
+      offX: wx - node.x,
+      offY: wy - node.y,
+      canvasLeft: rect.left,
+      canvasTop:  rect.top,
+    };
+  }, [nodes, pan, zoom]);
+
+  const onNodeKeyDown = useCallback((e, nodeId) => {
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault();
+      deleteNode(nodeId);
+    }
+    if (e.key === 'Escape') setSelected(null);
+    // Arrow keys to nudge
+    const STEP = e.shiftKey ? 20 : 5;
+    const moves = { ArrowLeft:[-STEP,0], ArrowRight:[STEP,0], ArrowUp:[0,-STEP], ArrowDown:[0,STEP] };
+    if (moves[e.key]) {
+      e.preventDefault();
+      const [dx, dy] = moves[e.key];
+      setNodes(ns => ns.map(n => n.id === nodeId ? { ...n, x: n.x+dx, y: n.y+dy } : n));
+    }
+  }, []);  // eslint-disable-line
+
+  /* ── Port events ─────────────────────────────────────────── */
+  const onPortMouseDown = useCallback((e, nodeId, portName) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const w = toWorld(e.clientX, e.clientY);
+    setDraftConn({ srcNodeId: nodeId, srcPort: portName, x: w.x, y: w.y });
+  }, [toWorld]);
+
+  const onPortMouseUp = useCallback((e, nodeId, portName) => {
+    e.stopPropagation();
+    if (draftConn && draftConn.srcNodeId !== nodeId) {
+      const dup = conns.find(c => c.src === draftConn.srcNodeId && c.srcPort === draftConn.srcPort && c.tgt === nodeId);
+      if (!dup) {
+        setConns(cs => [...cs, { id: uid(), src: draftConn.srcNodeId, srcPort: draftConn.srcPort, tgt: nodeId, tgtPort: 'in' }]);
+      }
+      setDraftConn(null);
+    }
+  }, [draftConn, conns]);
+
+  const onPortMouseEnter = useCallback((nodeId, port, isInput) => {
+    setHoveredPort({ nodeId, port, isInput });
+  }, []);
+  const onPortMouseLeave = useCallback(() => setHoveredPort(null), []);
+
+  /* ── Global mouse tracking (for drag outside canvas) ─────── */
+  useEffect(() => {
+    const mm = (e) => onCanvasMouseMove(e);
+    const mu = (e) => onCanvasMouseUp(e);
+    window.addEventListener('mousemove', mm);
+    window.addEventListener('mouseup', mu);
+    return () => { window.removeEventListener('mousemove', mm); window.removeEventListener('mouseup', mu); };
+  }, [onCanvasMouseMove, onCanvasMouseUp]);
+
+  /* ── Zoom ────────────────────────────────────────────────── */
+  const onWheel = useCallback((e) => {
+    e.preventDefault();
+    const factor = e.deltaY > 0 ? 0.92 : 1.09;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    setZoom(z => {
+      const nz = Math.min(Math.max(z * factor, 0.25), 2.5);
+      setPan(p => ({
+        x: mx - (mx - p.x) * (nz / z),
+        y: my - (my - p.y) * (nz / z),
+      }));
+      return nz;
+    });
+  }, []);
+
+  /* ── Context menu ────────────────────────────────────────── */
+  const onContextMenu = useCallback((e, nodeId) => {
+    e.preventDefault();
+    setCtxMenu({ x: e.clientX, y: e.clientY, nodeId });
+  }, []);
+
+  useEffect(() => {
+    const hide = () => setCtxMenu(null);
+    window.addEventListener('click', hide);
+    return () => window.removeEventListener('click', hide);
+  }, []);
+
+  /* ── Palette drag ────────────────────────────────────────── */
+  const onPaletteItemMouseDown = useCallback((e, type) => {
+    e.preventDefault();
+    setPalDrag({ type, clientX: e.clientX, clientY: e.clientY });
+    const mm = (me) => setPalDrag(pd => pd ? { ...pd, clientX: me.clientX, clientY: me.clientY } : null);
+    const mu = (me) => {
+      setPalDrag(null);
+      // Drop on canvas?
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (rect &&
+          me.clientX >= rect.left && me.clientX <= rect.right &&
+          me.clientY >= rect.top  && me.clientY <= rect.bottom) {
+        const wx = (me.clientX - rect.left - pan.x) / zoom;
+        const wy = (me.clientY - rect.top  - pan.y) / zoom;
+        const def = NODE_TYPES[type];
+        const newNode = {
+          id: uid(),
+          type,
+          x: wx - NODE_W / 2,
+          y: wy - nodeH(type) / 2,
+          label: def?.label ?? type,
+          config: defaultConfig(type),
+        };
+        setNodes(ns => [...ns, newNode]);
+        setSelected({ kind:'node', id: newNode.id });
+      }
+      window.removeEventListener('mousemove', mm);
+      window.removeEventListener('mouseup', mu);
+    };
+    window.addEventListener('mousemove', mm);
+    window.addEventListener('mouseup', mu);
+  }, [pan, zoom]);
+
+  /* ── Delete ──────────────────────────────────────────────── */
+  function deleteNode(nodeId) {
+    setNodes(ns => ns.filter(n => n.id !== nodeId));
+    setConns(cs => cs.filter(c => c.src !== nodeId && c.tgt !== nodeId));
+    if (selected?.id === nodeId) setSelected(null);
+  }
+  function deleteConn(connId) {
+    setConns(cs => cs.filter(c => c.id !== connId));
+    if (selected?.id === connId) setSelected(null);
+  }
+
+  /* ── Global keyboard ─────────────────────────────────────── */
+  useEffect(() => {
+    const h = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
+        e.preventDefault();
+        if (selected.kind === 'node') deleteNode(selected.id);
+        if (selected.kind === 'conn') deleteConn(selected.id);
+      }
+      if (e.key === 'Escape') {
+        setSelected(null);
+        setDraftConn(null);
+      }
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [selected]); // eslint-disable-line
+
+  /* ── Node config change ──────────────────────────────────── */
+  function onConfigChange(nodeId, path, value) {
+    setNodes(ns => ns.map(n => {
+      if (n.id !== nodeId) return n;
+      if (path.startsWith('config.')) {
+        const key = path.slice(7);
+        return { ...n, config: { ...(n.config ?? {}), [key]: value } };
+      }
+      return { ...n, [path]: value };
+    }));
+  }
+
+  /* ── Run workflow ────────────────────────────────────────── */
+  async function runWorkflow() {
+    if (running || !nodes.length) return;
+    abortRef.current = false;
+    setRunning(true);
+    const initialStatus = {};
+    nodes.forEach(n => { initialStatus[n.id] = 'idle'; });
+    setNodeStatus({ ...initialStatus });
+    setConnStatus({});
+
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+    // Build adjacency list
+    const adj = {};
+    nodes.forEach(n => { adj[n.id] = {}; });
+    conns.forEach(c => {
+      if (!adj[c.src]) adj[c.src] = {};
+      adj[c.src][c.srcPort] = c;
+    });
+
+    // BFS execution
+    const trigger = nodes.find(n => NODE_TYPES[n.type]?.cat === 'Triggers') ?? nodes[0];
+    const queue = [{ nodeId: trigger.id, connId: null }];
+    const visited = new Set();
+
+    while (queue.length > 0) {
+      if (abortRef.current) break;
+      const { nodeId, connId } = queue.shift();
+      if (visited.has(nodeId)) continue;
+      visited.add(nodeId);
+
+      // Animate connection
+      if (connId) {
+        setConnStatus(cs => ({ ...cs, [connId]: 'running' }));
+        await sleep(300);
+        setConnStatus(cs => ({ ...cs, [connId]: 'success' }));
+      }
+
+      // Run node
+      setNodeStatus(ns => ({ ...ns, [nodeId]: 'running' }));
+      const node  = nodes.find(n => n.id === nodeId);
+      const isAI  = NODE_TYPES[node.type]?.cat === 'AI';
+      await sleep(isAI ? 1200 : 600 + Math.random() * 400);
+
+      if (abortRef.current) break;
+
+      // Simulate occasional error (not for demo triggers/endpoints)
+      const hasError = false; // set true to demo error state
+      setNodeStatus(ns => ({ ...ns, [nodeId]: hasError ? 'error' : 'success' }));
+
+      if (hasError) break;
+
+      // Queue next nodes
+      const outputs = NODE_TYPES[node.type]?.outputs ?? ['out'];
+      for (const port of outputs) {
+        const edge = adj[nodeId]?.[port];
+        if (edge && !visited.has(edge.tgt)) {
+          // if/else: only follow one branch
+          if (outputs.includes('True') && port === 'False') {
+            await sleep(150); // show both ports briefly
+          }
+          queue.push({ nodeId: edge.tgt, connId: edge.id });
+        }
+      }
+
+      await sleep(100);
+    }
+
+    setRunning(false);
+  }
+
+  function resetWorkflow() {
+    abortRef.current = true;
+    setRunning(false);
+    setNodeStatus({});
+    setConnStatus({});
+  }
+
+  /* ── Clear canvas ────────────────────────────────────────── */
+  function clearCanvas() {
+    setNodes([]);
+    setConns([]);
+    setSelected(null);
+    setNodeStatus({});
+    setConnStatus({});
+  }
+
+  /* ── Zoom controls ───────────────────────────────────────── */
+  function zoomTo(factor) {
+    const cx = canvasSize.w / 2, cy = canvasSize.h / 2;
+    setZoom(z => {
+      const nz = Math.min(Math.max(z * factor, 0.25), 2.5);
+      setPan(p => ({
+        x: cx - (cx - p.x) * (nz / z),
+        y: cy - (cy - p.y) * (nz / z),
+      }));
+      return nz;
+    });
+  }
+
+  function fitView() {
+    if (!nodes.length) return;
+    const padding = 60;
+    const allX = nodes.map(n => [n.x, n.x + NODE_W]).flat();
+    const allY = nodes.map(n => [n.y, n.y + nodeH(n.type)]).flat();
+    const minX = Math.min(...allX), maxX = Math.max(...allX);
+    const minY = Math.min(...allY), maxY = Math.max(...allY);
+    const ww   = maxX - minX + padding * 2;
+    const wh   = maxY - minY + padding * 2;
+    const nz   = Math.min(Math.max(Math.min(canvasSize.w / ww, canvasSize.h / wh), 0.25), 1.5);
+    setPan({
+      x: (canvasSize.w - ww * nz) / 2 - (minX - padding) * nz,
+      y: (canvasSize.h - wh * nz) / 2 - (minY - padding) * nz,
+    });
+    setZoom(nz);
+  }
+
+  /* ── Derived state ───────────────────────────────────────── */
+  const selectedNode = selected?.kind === 'node' ? nodes.find(n => n.id === selected.id) : null;
+
+  /* Draft path for connection in progress */
+  let draftPath = null;
+  if (draftConn) {
+    const srcNode = nodes.find(n => n.id === draftConn.srcNodeId);
+    if (srcNode) {
+      const sp = portPos(srcNode, draftConn.srcPort, false);
+      draftPath = bezier(sp.x, sp.y, draftConn.x, draftConn.y);
+    }
+  }
+
+  /* Determine which input port is "connectable" (for hover highlight during connect) */
+  const connectingFrom = !!draftConn;
+
+  /* ── Render ──────────────────────────────────────────────── */
+  return (
+    <div className="wf-app">
+      {/* ── Toolbar ── */}
+      <header className="toolbar" role="banner">
+        <div className="toolbar-brand">
+          <span className="toolbar-brand-icon" aria-hidden="true">⑂</span>
+          Workflow Builder
+        </div>
+        <div className="toolbar-divider" aria-hidden="true" />
+
+        <button
+          className="tb-btn primary"
+          onClick={running ? resetWorkflow : runWorkflow}
+          disabled={!nodes.length}
+          aria-label={running ? 'Stop workflow' : 'Run workflow'}
+        >
+          {running ? '⏹ Stop' : '▶ Run'}
+        </button>
+
+        <button className="tb-btn" onClick={fitView} title="Fit all nodes in view" aria-label="Fit view">⊡ Fit</button>
+
+        <div className="toolbar-divider" aria-hidden="true" />
+
+        <button className="tb-btn" onClick={() => zoomTo(1.15)} aria-label="Zoom in">＋</button>
+        <span className="zoom-label" aria-live="polite" aria-label={`Zoom ${Math.round(zoom*100)}%`}>
+          {Math.round(zoom * 100)}%
+        </span>
+        <button className="tb-btn" onClick={() => zoomTo(0.87)} aria-label="Zoom out">－</button>
+
+        <div className="toolbar-spacer" />
+
+        <button
+          className="tb-btn"
+          onClick={() => { setNodes(INIT_NODES); setConns(INIT_CONNS); resetWorkflow(); }}
+          aria-label="Load example workflow"
+        >
+          📋 Example
+        </button>
+        <button className="tb-btn danger" onClick={clearCanvas} aria-label="Clear canvas">🗑 Clear</button>
+      </header>
+
+      {/* ── Body ── */}
+      <div className="wf-body" role="main">
+        {/* ── Palette ── */}
+        <nav className="palette" aria-label="Node palette">
+          {CATEGORIES.map(cat => (
+            <div className="palette-section" key={cat} role="group" aria-label={`${cat} nodes`}>
+              <div className="palette-heading">{cat}</div>
+              {Object.entries(NODE_TYPES)
+                .filter(([, def]) => def.cat === cat)
+                .map(([type, def]) => (
+                  <div
+                    key={type}
+                    className="palette-item"
+                    draggable
+                    onMouseDown={e => onPaletteItemMouseDown(e, type)}
+                    onDragStart={e => e.preventDefault()}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Drag ${def.label} onto canvas`}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        // Add node to canvas center
+                        const cx = (canvasSize.w / 2 - pan.x) / zoom;
+                        const cy = (canvasSize.h / 2 - pan.y) / zoom;
+                        const newNode = { id: uid(), type, x: cx - NODE_W/2, y: cy - nodeH(type)/2, label: def.label, config: defaultConfig(type) };
+                        setNodes(ns => [...ns, newNode]);
+                        setSelected({ kind:'node', id: newNode.id });
+                      }
+                    }}
+                  >
+                    <div className="pi-dot" style={{ background: def.color }} aria-hidden="true" />
+                    <span className="pi-icon" aria-hidden="true">{def.icon}</span>
+                    <span className="pi-label">{def.label}</span>
+                  </div>
+                ))}
+            </div>
+          ))}
+          <div className="palette-hint" aria-hidden="true">
+            Drag nodes onto canvas · Connect by dragging output ports · Delete with ⌫
+          </div>
+        </nav>
+
+        {/* ── Canvas ── */}
+        <div
+          ref={canvasRef}
+          className={`canvas-wrap ${dragRef.current?.type === 'pan' ? 'panning' : ''} ${connectingFrom ? 'connecting' : ''}`}
+          onMouseDown={onCanvasMouseDown}
+          onWheel={onWheel}
+          onContextMenu={e => onContextMenu(e, null)}
+          role="region"
+          aria-label="Workflow canvas"
+          tabIndex={-1}
+        >
+          {nodes.length === 0 && (
+            <div className="canvas-empty" aria-live="polite">
+              <span className="canvas-empty-icon" aria-hidden="true">⑂</span>
+              <span className="canvas-empty-text">Drag nodes from the palette to start building</span>
+            </div>
+          )}
+
+          {/* Transformed world */}
+          <div
+            className="canvas-transform"
+            style={{ transform: `translate(${pan.x}px,${pan.y}px) scale(${zoom})` }}
+          >
+            {/* SVG connections layer */}
+            <svg className="connections-svg" style={{ width: 9999, height: 9999 }} aria-hidden="true">
+              {conns.map(c => (
+                <ConnectionPath
+                  key={c.id}
+                  conn={c}
+                  nodes={nodes}
+                  status={connStatus[c.id] ?? 'idle'}
+                  selected={selected?.kind === 'conn' && selected.id === c.id}
+                  onClick={id => setSelected({ kind:'conn', id })}
+                />
+              ))}
+              {draftPath && (
+                <path className="draft-path" d={draftPath} />
+              )}
+            </svg>
+
+            {/* Nodes */}
+            {nodes.map(node => (
+              <WorkflowNode
+                key={node.id}
+                node={node}
+                selected={selected?.kind === 'node' && selected.id === node.id}
+                status={nodeStatus[node.id] ?? 'idle'}
+                onMouseDown={onNodeMouseDown}
+                onPortMouseDown={onPortMouseDown}
+                onPortMouseUp={onPortMouseUp}
+                onPortMouseEnter={onPortMouseEnter}
+                onPortMouseLeave={onPortMouseLeave}
+                onKeyDown={onNodeKeyDown}
+                connectingFrom={connectingFrom}
+                isConnectable={connectingFrom && hoveredPort?.nodeId === node.id && hoveredPort?.isInput}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* ── Config Panel ── */}
+        {selectedNode && (
+          <ConfigPanel
+            key={selectedNode.id}
+            node={selectedNode}
+            status={nodeStatus[selectedNode.id] ?? 'idle'}
+            onChange={(path, value) => onConfigChange(selectedNode.id, path, value)}
+            onClose={() => setSelected(null)}
+            onDelete={() => deleteNode(selectedNode.id)}
+          />
+        )}
+      </div>
+
+      {/* ── MiniMap ── */}
+      <MiniMap
+        nodes={nodes}
+        connections={conns}
+        pan={pan}
+        zoom={zoom}
+        canvasSize={canvasSize}
+      />
+
+      {/* ── Drop ghost ── */}
+      {paletteDrag && (
+        <div
+          className="drop-ghost"
+          style={{ left: paletteDrag.clientX, top: paletteDrag.clientY }}
+          aria-hidden="true"
+        >
+          {NODE_TYPES[paletteDrag.type]?.icon} {NODE_TYPES[paletteDrag.type]?.label}
+        </div>
+      )}
+
+      {/* ── Context menu ── */}
+      {ctxMenu && (
+        <div
+          className="ctx-menu"
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          role="menu"
+          aria-label="Canvas context menu"
+        >
+          {ctxMenu.nodeId ? (
+            <>
+              <div className="ctx-item" role="menuitem" onClick={() => { setSelected({ kind:'node', id: ctxMenu.nodeId }); setCtxMenu(null); }}>
+                ⚙ Configure node
+              </div>
+              <div className="ctx-divider" />
+              <div className="ctx-item danger" role="menuitem" onClick={() => { deleteNode(ctxMenu.nodeId); setCtxMenu(null); }}>
+                🗑 Delete node
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="ctx-item" role="menuitem" onClick={() => { fitView(); setCtxMenu(null); }}>
+                ⊡ Fit to view
+              </div>
+              <div className="ctx-item" role="menuitem" onClick={() => { setZoom(1); setCtxMenu(null); }}>
+                1:1 Reset zoom
+              </div>
+              <div className="ctx-divider" />
+              <div className="ctx-item" role="menuitem" onClick={() => {
+                setNodes(INIT_NODES); setConns(INIT_CONNS); resetWorkflow(); setCtxMenu(null);
+              }}>
+                📋 Load example
+              </div>
+              {selected?.kind === 'conn' && (
+                <>
+                  <div className="ctx-divider" />
+                  <div className="ctx-item danger" role="menuitem" onClick={() => { deleteConn(selected.id); setCtxMenu(null); }}>
+                    🗑 Delete connection
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Screenreader live region */}
+      <div aria-live="assertive" aria-atomic="true" className="sr-only" id="sr-announce" />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<WorkflowBuilder />);
+</script>
+</body>
+</html>
