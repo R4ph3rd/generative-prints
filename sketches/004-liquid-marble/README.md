@@ -1,12 +1,12 @@
 # 004 · Liquid Marble
 
-Psychedelic liquid marbling: bold flat bands of colour fold and swirl like poured paint, edged with thin bright lines and chromatic pink/cyan fringes, under heavy risograph grain. It loops seamlessly and ships with 10 palettes.
+Psychedelic liquid marbling: bold flat bands of colour fold and swirl like poured paint, edged with thin bright lines and chromatic pink/cyan fringes, under heavy risograph grain. It loops seamlessly and ships with 13 palettes.
 
 Open via the repo server: `python -m http.server 3737`, then go to http://localhost:3737/sketches/004-liquid-marble/. It needs WebGL2.
 
 ## How it works
 
-1. **Scene** (`scene.js`): a seed picks a palette (10 built-in, or random by seed) and optionally shuffles the band order, then builds 32 seeded phases for the noise offsets and directions. The palette colours are converted to linear RGB. Only `seed`, `palette` and `colorOrder` rebuild the scene; all other params are read live at draw time.
+1. **Scene** (`scene.js`): a seed picks a palette (13 built-in, or random by seed) and optionally shuffles the band order, then builds 32 seeded phases for the noise offsets and directions. The palette colours are converted to linear RGB. Only `seed`, `palette` and `colorOrder` rebuild the scene; all other params are read live at draw time.
 2. **Renderer** (`marble-gl.js`, raw WebGL2): one full-screen fragment shader. The fluid is built by advection, not nested fbm warping. Each warp pass moves the sample point in 4 small steps along a smooth 3D simplex velocity field, and swirl rotates that field. The bands therefore stretch into filaments without folding over. Every noise call returns an exact analytic gradient, so band anti-aliasing and line/fringe widths are resolution-independent: they are the same across tiles, crops and supersampling, with no `fwidth`. The seamless loop comes from sampling noise along circles with an integer number of turns per loop. A tanh curve evens out how much area each colour band gets. Each band boundary gets a bright line, pink/cyan fringes offset to either side (an RGB misregistration look) and a glow. The grain is hashed riso-like speckle on an absolute grid sized in short-side units, so it scales with print size. It can re-randomize 24 times per loop second.
    Every pixel is a pure function of normalized position (short side = 1), time, params and seed, so the preview, the 100% view, tiled stills and video frames agree. Measured: `check=1` in `dev.html` gives zero seam and zero loop difference.
 3. **Sketch** (`sketch.js`): UI, live loop, still and video export.
