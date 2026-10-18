@@ -326,7 +326,6 @@ async function exportVideo(opts = {}) {
           return renderer.canvas;
         },
         bitrate, container: 'auto',
-        filename: opts.noDownload ? undefined : filename,
         signal: abortCtl.signal,
         onCodec: ({ container, codec }) => { codecNote = `${container} ${codec}`; },
         onProgress: ({ frame, total, phase }) => {
@@ -362,6 +361,10 @@ async function exportVideo(opts = {}) {
           },
         });
       } finally { stop = true; }
+    }
+    if (format === 'mp4' && blob && !opts.noDownload) {
+      // 'auto' may have fallen back to WebM (no H.264 encoder): name the file after what it really is
+      downloadBlob(blob, /webm/.test(blob.type) ? filename.replace(/\.mp4$/, '.webm') : filename);
     }
     info.vprogress = `saved ${filename} (${((performance.now() - t0) / 1000).toFixed(1)}s, ${(blob.size / 1e6).toFixed(1)} MB)${note()}`;
   } catch (e) {
