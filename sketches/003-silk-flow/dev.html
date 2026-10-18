@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>003 Silk Flow · dev harness</title>
+  <!--
+    Standalone renderer test page (no UI). Query overrides any DEFAULTS key, plus:
+      w, h      output size (default 1000 x 1250)     t      time in seconds
+      ss        samples per pixel (1 | 2 | 4)
+      crop=x,y,cw,ch  draw only that window of the w x h image
+      tiles=1   render via 2x2 renderRegion calls stitched into a 2D canvas (seam check)
+      check=1   print seam diff, loop diff (t=0 vs t=loopSeconds) and frame timing into #info
+    e.g. dev.html?t=3.5&palette=glacier&zoom=2&w=800&h=1000&seed=7
+  -->
+  <style>
+    html, body { margin: 0; background: #222; }
+    canvas { display: block; }
+    #info { position: fixed; left: 8px; bottom: 8px; font: 12px/1.4 monospace; color: #0f0; background: #000c; padding: 4px 6px; white-space: pre; }
+    #info:empty { display: none; }
+  </style>
+</head>
+<body>
+  <div id="info"></div>
+  <script type="module">
+    import { buildScene } from './scene.js';
+    import { SilkRenderer } from './silk-gl.js';
+
+    const DEFAULTS = {
+      seed: 1234, ribbons: 5, ribbonWidth: 0.22, widthVariance: 0.5, spread: 0.6, angle: -25,
+      curvature: 0.6, twist: 0.6, warp: 0.5, warpScale: 1.0, zoom: 1.0, offsetX: 0, offsetY: 0,
+      palette: 'ember', hueShift: 0, saturation: 1.0, exposure: 0.0, background: '#e4e5ee',
+      streaks: 0.6, streakScale: 1.0, sheen: 0.7, rim: 0.6, glow: 0.5, dof: 0.5, focus: 0.5,
+      softness: 0.25, grain: 0.03, speed: 1.0, loopSeconds: 12, time: 0,
+      curl: 0.35, strands: 2, // added by the renderer
+      debug: 0, // dev only
+    };
+    const q = new URLSearchParams(location.search);
+    const P = { ...DEFAULTS };
+    for (const [k, v] of q) {
+      if (!(k in DEFAULTS)) continue;
+      P[k] = typeof DEFAULTS[k] === 'number' ? parseFloat(v) : (v.startsWith('#') || !/^[0-9a-f]{6}$/i.test(v) ? v : '#' + v);
+    }
+    const w = parseInt(q.get('w') || '1000', 10), h = parseInt(q.get('h') || '1250', 10);
+    const t = parseFloat(q.get('t') || String(P.time));
+    const ss = parseInt(q.get('ss') || '1', 10);
+    const info = document.getElementById('info');
+
+    const renderer = new SilkRenderer();
+    renderer.setScene(buildScene(P.seed, P));
+
+    if (q.get('tiles') === '1') {
+      // 2x2 renderRegion tiles with an odd split, stitched into a 2D canvas
+      const cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      const ctx = cv.getContext('2d');
+      const sx = Math.floor(w * 0.43), sy = Math.floor(h * 0.57);
+      for (const [x, y, tw, th] of [[0, 0, sx, sy], [sx, 0, w - sx, sy], [0, sy, sx, h - sy], [sx, sy, w - sx, h - sy]]) {
+        const px = renderer.renderRegion({ P, t, fullW: w, fullH: h, x, y, w: tw, h: th, ss });
+        ctx.putImageData(new ImageData(new Uint8ClampedArray(px.buffer), tw, th), x, y);
+      }
+      document.body.appendChild(cv);
+    } else {
+      // crop=x,y,cw,ch: draw only that window of the w x h image (100% loupe test)
+      const cr = (q.get('crop') || '').split(',').map(Number);
+      if (cr.length === 4) renderer.draw({ P, t, w: cr[2], h: cr[3], fullW: w, fullH: h, x: cr[0], y: cr[1], ss });
+      else renderer.draw({ P, t, w, h, ss });
+      document.body.appendChild(renderer.canvas);
+    }
+
+    if (q.get('check') === '1') {
+      const diff = (a, b) => { let m = 0, n = 0; for (let i = 0; i < a.length; i++) { const d = Math.abs(a[i] - b[i]); if (d) n++; if (d > m) m = d; } return `max ${m}, ${n} bytes differ`; };
+      const full = renderer.renderRegion({ P, t, fullW: w, fullH: h, x: 0, y: 0, w, h, ss });
+      const tiled = new Uint8Array(w * h * 4);
+      const sx = Math.floor(w * 0.43), sy = Math.floor(h * 0.57);
+      for (const [x, y, tw, th] of [[0, 0, sx, sy], [sx, 0, w - sx, sy], [0, sy, sx, h - sy], [sx, sy, w - sx, h - sy]]) {
+        const px = renderer.renderRegion({ P, t, fullW: w, fullH: h, x, y, w: tw, h: th, ss });
+        for (let r = 0; r < th; r++) tiled.set(px.subarray(r * tw * 4, (r + 1) * tw * 4), ((y + r) * w + x) * 4);
+      }
+      // draw() (default framebuffer, bottom-up) vs renderRegion (top-down)
+      renderer.draw({ P, t, w, h, ss });
+      const gl = renderer.gl, dr = new Uint8Array(w * h * 4), flip = new Uint8Array(w * h * 4);
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, dr);
+      for (let r = 0; r < h; r++) flip.set(dr.subarray((h - 1 - r) * w * 4, (h - r) * w * 4), r * w * 4);
+      const a0 = renderer.renderRegion({ P, t: 0, fullW: w, fullH: h, x: 0, y: 0, w, h, ss });
+      const aL = renderer.renderRegion({ P, t: P.loopSeconds, fullW: w, fullH: h, x: 0, y: 0, w, h, ss });
+      const aE = renderer.renderRegion({ P, t: P.loopSeconds - 1 / 60, fullW: w, fullH: h, x: 0, y: 0, w, h, ss });
+      const one = new Uint8Array(4);
+      const times = [];
+      for (let i = 0; i < 4; i++) {
+        const t0 = performance.now();
+        renderer.draw({ P, t: t + i / 30, w, h, ss });
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, one);
+        times.push(performance.now() - t0);
+      }
+      info.textContent = [
+        `seam (2x2 tiles vs single region): ${diff(full, tiled)}`,
+        `draw vs renderRegion: ${diff(full, flip)}`,
+        `loop (t=0 vs t=loop): ${diff(a0, aL)}`,
+        `loop (t=0 vs t=loop-1/60, expect small): ${diff(a0, aE)}`,
+        `frame ms (${w}x${h}, ss ${ss}): ${times.map((x) => x.toFixed(0)).join(' ')}`,
+        `renderer: ${gl.getParameter(gl.RENDERER)}`,
+      ].join('\n');
+    }
+    document.title = 'done';
+  </script>
+</body>
+</html>
