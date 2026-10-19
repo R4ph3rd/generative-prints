@@ -2,14 +2,17 @@
 // Animated psychedelic marbled fluid (domain-warped swirls in flat colour bands), drawn by one WebGL2 fragment shader.
 // Pipeline: seeded scene (scene.js) -> WebGL2 renderer (marble-gl.js, its own canvas shown directly
 // in #stage) -> live preview, tiled print-size still PNG (lib/poster-export.js) or MP4/WebM video
-// (lib/video-export.js). A requestAnimationFrame loop drives the animation (no p5).
+// (lib/video-export.js) or PNG sequence (lib/frame-sequence.js). A requestAnimationFrame loop drives the animation (no p5).
 import { Pane } from 'https://cdn.jsdelivr.net/npm/tweakpane@4.0.5/dist/tweakpane.min.js';
 import { PALETTES, buildScene } from './scene.js';
 import { MarbleRenderer } from './marble-gl.js';
 import {
   PAPER_PRESETS, paperSizePx, posterFilename, exportPosterPNG, downloadJSON, pickJSONFile, downloadBlob,
 } from '../../lib/poster-export.js';
-import { exportVideo as encodeVideo, recordCanvas, videoSupport, videoFilename } from '../../lib/video-export.js';
+import {
+  exportVideo as encodeVideo, recordCanvas, recordCanvasFrames, slowdownFor, videoSupport, videoFilename,
+} from '../../lib/video-export.js';
+import { exportFrameSequence, pickSequenceDir, ffmpegCommand } from '../../lib/frame-sequence.js';
 
 const SKETCH = 'liquid-marble';
 const PARAMS_VERSION = 1;
@@ -53,6 +56,7 @@ const DEFAULTS = {
   vignette: 0.15,
   // motion
   speed: 1.0,
+  fixedStep: false,
   loopSeconds: 16,
   flow: 1.0,
   time: 0,
@@ -93,6 +97,8 @@ let lastParamsKey = '';
 let lastTs = 0, fpsFrames = 0, fpsT0 = 0, fps = 0;
 let lastSliderT = 0, lastHashT = 0, lastStatusT = 0;
 let drawMs = 0;
+let stepAcc = 0;      // frame-exact playback: wall time banked towards the next frame (ms)
+let lastSlow = null;  // { k, fps } of the last slow-mo capture, for the output readout
 let appliedCss = '';
 let lastLoop = P.loopSeconds;
 let supportCache = null;
@@ -167,8 +173,9 @@ function drawPreview() {
 }
 
 function updateStatus(L) {
-  const state = P.playing ? `${fps.toFixed(0)} fps` : 'paused';
-  setStatus(`seed ${P.seed} · ${info.palette} · t ${fmtT(P.time)}/${P.loopSeconds}s · ${L ? L.label : ''} · ${state}   [Space play · R seed · Shift+R params · ←/→ seed · ,/. step · S still · V video · P snapshot · Z 100%]`);
+  let state = P.playing ? `${fps.toFixed(0)} fps` : 'paused';
+  if (P.playing && P.fixedStep) state = `frame-exact · ${fps.toFixed(0)} fps rendered · x${(fps / P.videoFps).toFixed(2)} real-time`;
+  setStatus(`seed ${P.seed} · ${info.palette} · t ${fmtT(P.time)}/${P.loopSeconds}s · ${L ? L.label : ''} · ${state}   [Space play · R seed · Shift+R params · ←/→ seed · ,/. step · S still · V video · P snapshot · Z 100% · F frame-exact]`);
 }
 
 function writeHash() {
@@ -180,7 +187,14 @@ function loop(ts) {
   if (!renderer || exporting) { lastTs = ts; return; }
   const dt = lastTs ? Math.min(0.25, (ts - lastTs) / 1000) : 0;
   lastTs = ts;
-  if (P.playing) { P.time = wrapT(P.time + dt * P.speed); dirty = true; }
+  if (P.playing) {
+    if (P.fixedStep) {
+      // frame-exact: one video frame (speed/fps seconds) per drawn frame, never faster than real time
+      const frameMs = 1000 / P.videoFps;
+      stepAcc = Math.min(stepAcc + dt * 1000, frameMs * 2);
+      if (stepAcc >= frameMs - 2) { stepAcc = Math.max(0, stepAcc - frameMs); P.time = wrapT(P.time + P.speed / P.videoFps); dirty = true; }
+    } else { stepAcc = 0; P.time = wrapT(P.time + dt * P.speed); dirty = true; }
+  }
   if (!dirty) {
     if (ts - lastStatusT > 500) { lastStatusT = ts; updateStatus(null); }
     return;
@@ -206,8 +220,20 @@ function updateInfo() {
   const dur = P.videoLoops * P.loopSeconds;
   const frames = Math.round(P.videoFps * dur);
   const mb = (P.videoBitrate * dur) / 8;
-  info.video = `${dur} s · ${frames} frames · ~${mb.toFixed(0)} MB`;
+  const f = P.videoFormat;
+  if (f === 'webm') info.video = `${dur} s real-time · ${frames} frames wanted, slow GPU drops some · ~${mb.toFixed(0)} MB`;
+  else if (f === 'webm-slow') {
+    info.video = lastSlow
+      ? `x${lastSlow.k} slow-mo · ${frames} frames · speed up: ${slowCmd(lastSlow.k, lastSlow.fps)}`
+      : `${frames} frames at a fixed slot (slow-down x measured at export) · ffmpeg speed-up command shown after`;
+  } else if (f === 'png-seq') {
+    const [w, h] = parseSize(P.videoSize);
+    info.video = `${frames} PNGs of ${w}×${h} · ~${((w * h * PNG_BYTES_PER_PX * frames) / 1e9).toFixed(1)} GB · folder (Chrome/Edge) or ZIP · ${ffmpegCommand(P.videoFps)}`;
+  } else info.video = `${dur} s · ${frames} frames · ~${mb.toFixed(0)} MB`;
 }
+
+const PNG_BYTES_PER_PX = 2.8; // measured on the default (grainy) look; PNGs of grain barely compress
+const slowCmd = (k, fpsV) => `ffmpeg -i in.webm -filter:v "setpts=PTS/${k}" -r ${fpsV} out.mp4`;
 
 function exportTileSize() {
   return Math.max(64, Math.floor(Math.min(2048, renderer ? renderer.maxTile() : 2048) / 8) * 8);
@@ -282,9 +308,17 @@ function quickSnapshot(opts = {}) {
 // ----------------------------------------------------------------------------- video export
 const fmtDur = (s) => { s = Math.max(0, Math.round(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 
+/** Draw frame i of the export, then block until the GPU has finished it (for timing). */
+function drawAndSync(i, fpsV, vw, vh) {
+  renderer.draw({ P, t: wrapT(i / fpsV), w: vw, h: vh, ss: P.videoSS });
+  const gl = renderer.gl;
+  gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+}
+
 /**
- * Export the loop as video. opts (all optional, mostly for testing): noDownload, format, width, height,
- * fps, frameCount, loops.
+ * Export the loop as video / PNG sequence. opts (all optional, mostly for testing): noDownload, format,
+ * width, height, fps, frameCount, loops, slowdown (force the slow-mo factor), dirHandle (null forces ZIP).
+ * Formats: 'mp4' (offline), 'webm' (real-time), 'webm-slow' (slow-mo capture), 'png-seq' (offline PNGs).
  */
 async function exportVideo(opts = {}) {
   if (exporting || !renderer) return null;
@@ -297,6 +331,20 @@ async function exportVideo(opts = {}) {
   const frameCount = opts.frameCount || Math.round(fpsV * duration);
   const seconds = opts.frameCount ? frameCount / fpsV : duration;
   const bitrate = P.videoBitrate * 1e6;
+  let format = opts.format || P.videoFormat;
+
+  // The folder picker needs a user gesture, so ask before any other await.
+  let dirHandle = null;
+  if (format === 'png-seq') {
+    if ('dirHandle' in opts) dirHandle = opts.dirHandle;
+    else {
+      try { dirHandle = await pickSequenceDir(); } catch (e) {
+        info.vprogress = e.name === 'AbortError' ? 'cancelled (no folder chosen)' : `error: ${e.message}`;
+        setStatus(`video: ${info.vprogress}`);
+        return null;
+      }
+    }
+  }
 
   exporting = true;
   abortCtl = new AbortController();
@@ -305,17 +353,22 @@ async function exportVideo(opts = {}) {
   P.playing = false;
   refreshPane();
   const t0 = performance.now();
-  let blob = null, codecNote = '';
+  let blob = null, codecNote = '', savedMsg = '';
   try {
     ensureScene();
     supportCache = supportCache || await videoSupport();
     const sup = supportCache;
-    let format = opts.format || P.videoFormat;
     if (format === 'mp4' && !sup.webcodecs) { format = 'webm'; info.vprogress = 'WebCodecs unavailable, using real-time WebM'; }
     if (format === 'mp4' && (vw % 2 || vh % 2) && sup.h264) { vw -= vw % 2; vh -= vh % 2; }
     const ext = format === 'mp4' ? 'mp4' : 'webm';
-    const filename = videoFilename({ name: SKETCH, seed: P.seed, width: vw, height: vh, fps: fpsV, seconds, ext });
+    let filename = videoFilename({ name: SKETCH, seed: P.seed, width: vw, height: vh, fps: fpsV, seconds, ext });
     const note = () => codecNote ? ` · ${codecNote}` : '';
+    const frameProgress = (frame, total, extra = '') => {
+      const el = (performance.now() - t0) / 1000;
+      const eta = frame > 0 ? (el / frame) * (total - frame) : 0;
+      info.vprogress = `frame ${frame}/${total}${note()}${extra} · ${fmtDur(el)} elapsed · ETA ${fmtDur(eta)}`;
+      setStatus(`video ${filename} · ${info.vprogress}`);
+    };
 
     if (format === 'mp4') {
       blob = await encodeVideo({
@@ -329,14 +382,67 @@ async function exportVideo(opts = {}) {
         signal: abortCtl.signal,
         onCodec: ({ container, codec }) => { codecNote = `${container} ${codec}`; },
         onProgress: ({ frame, total, phase }) => {
+          if (phase === 'render' || phase === 'encode') frameProgress(frame, total);
+          else { info.vprogress = `${phase}${note()}`; setStatus(`video ${filename} · ${info.vprogress}`); }
+        },
+      });
+      if (blob && !opts.noDownload) {
+        // 'auto' may have fallen back to WebM (no H.264 encoder): name the file after what it really is
+        downloadBlob(blob, /webm/.test(blob.type) ? filename.replace(/\.mp4$/, '.webm') : filename);
+      }
+    } else if (format === 'png-seq') {
+      const stem = filename.replace(/\.[^.]+$/, '');
+      filename = dirHandle ? `${stem}/` : `${stem}.zip`;
+      codecNote = dirHandle ? 'PNG → folder' : 'PNG → ZIP (store-only)';
+      const res = await exportFrameSequence({
+        fps: fpsV, frameCount, name: stem, dirHandle,
+        renderFrame: async (i) => {
+          renderer.draw({ P, t: wrapT(i / fpsV), w: vw, h: vh, ss: P.videoSS });
+          return renderer.canvas; // encoded right after this returns, same task, buffer preserved
+        },
+        ffmpegOut: `${stem}.mp4`,
+        download: !opts.noDownload,
+        signal: abortCtl.signal,
+        onWarn: (m) => { console.warn(m); savedMsg += ` · WARNING ${m}`; },
+        onProgress: ({ frame, total, phase, bytes }) => {
+          if (phase === 'render' || phase === 'save') frameProgress(frame, total, ` · ${(bytes / 1e6).toFixed(0)} MB`);
+          else { info.vprogress = `${phase === 'zip' ? 'building ZIP' : phase}${note()}`; setStatus(`video ${filename} · ${info.vprogress}`); }
+        },
+      });
+      blob = res.blob;
+      savedMsg = (dirHandle ? ` · ${frameCount} PNGs + ffmpeg.txt in ${dirHandle.name}/${stem}/` : ' · ffmpeg.txt inside the ZIP') + savedMsg;
+      info.vprogress = `saved ${filename} (${((performance.now() - t0) / 1000).toFixed(1)}s, ${(res.bytes / 1e6).toFixed(1)} MB)${savedMsg}`;
+    } else if (format === 'webm-slow') {
+      if (!sup.mediaRecorder) throw new Error('MediaRecorder is not available in this browser');
+      // measure the real per-frame render time (GPU-synced), then pick an integer slow-down k
+      const ms = [];
+      for (let i = 0; i < 5; i++) {
+        const c0 = performance.now();
+        drawAndSync(i, fpsV, vw, vh);
+        ms.push(performance.now() - c0);
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      const warm = ms.slice(1).sort((x, y) => x - y);
+      const renderMs = warm[Math.floor(warm.length / 2)];
+      const k = opts.slowdown || slowdownFor(renderMs, fpsV);
+      const slotMs = (1000 * k) / fpsV;
+      filename = filename.replace(/\.webm$/, `_slow-x${k}.webm`);
+      codecNote = `slow-mo x${k} · ${renderMs.toFixed(0)} ms/frame · slot ${slotMs.toFixed(0)} ms`;
+      lastSlow = { k, fps: fpsV };
+      blob = await recordCanvasFrames({
+        canvas: renderer.canvas, frameCount, slotMs, bitrate,
+        mimeType: sup.webmMime || undefined,
+        renderFrame: (i) => { renderer.draw({ P, t: wrapT(i / fpsV), w: vw, h: vh, ss: P.videoSS }); },
+        filename: opts.noDownload ? undefined : filename,
+        signal: abortCtl.signal,
+        onProgress: ({ frame, total }) => {
           const el = (performance.now() - t0) / 1000;
-          if (phase === 'render' || phase === 'encode') {
-            const eta = frame > 0 ? (el / frame) * (total - frame) : 0;
-            info.vprogress = `frame ${frame}/${total}${note()} · ${fmtDur(el)} elapsed · ETA ${fmtDur(eta)}`;
-          } else info.vprogress = `${phase}${note()}`;
+          info.vprogress = `capturing ${frame}/${total}${note()} · ETA ${fmtDur((el / Math.max(1, frame)) * (total - frame))}`;
           setStatus(`video ${filename} · ${info.vprogress}`);
         },
       });
+      savedMsg = ` · plays x${k} too slow; speed up: ${slowCmd(k, fpsV)}`;
+      console.log(`[slow-mo] ${filename}\n${slowCmd(k, fpsV)}`);
     } else {
       // real-time: the canvas is animated here while MediaRecorder captures it
       let stop = false;
@@ -362,11 +468,9 @@ async function exportVideo(opts = {}) {
         });
       } finally { stop = true; }
     }
-    if (format === 'mp4' && blob && !opts.noDownload) {
-      // 'auto' may have fallen back to WebM (no H.264 encoder): name the file after what it really is
-      downloadBlob(blob, /webm/.test(blob.type) ? filename.replace(/\.mp4$/, '.webm') : filename);
+    if (format !== 'png-seq') {
+      info.vprogress = `saved ${filename} (${((performance.now() - t0) / 1000).toFixed(1)}s, ${(blob.size / 1e6).toFixed(1)} MB)${note()}${savedMsg}`;
     }
-    info.vprogress = `saved ${filename} (${((performance.now() - t0) / 1000).toFixed(1)}s, ${(blob.size / 1e6).toFixed(1)} MB)${note()}`;
   } catch (e) {
     info.vprogress = e.name === 'AbortError' ? 'cancelled' : `error: ${e.message}`;
     console.error(e);
@@ -460,7 +564,8 @@ function afterParamsChanged() {
 // ----------------------------------------------------------------------------- UI
 let suppress = false;
 const pane = new Pane({ title: 'Liquid Marble', container: document.getElementById('pane') });
-function refreshPane() { suppress = true; try { pane.refresh(); } finally { suppress = false; } }
+// pane.refresh() can write the step-rounded slider value (0.01) back into P.time; keep the exact time
+function refreshPane() { const t = P.time; suppress = true; try { pane.refresh(); } finally { suppress = false; P.time = t; } }
 function setSeed(s) { P.seed = ((s % 1000000) + 1000000) % 1000000; refreshPane(); requestDraw(); }
 
 const fSeed = pane.addFolder({ title: 'Seed' });
@@ -520,6 +625,7 @@ function makeTimeBinding() {
 }
 makeTimeBinding();
 fMotion.addBinding(P, 'speed', { min: 0, max: 4, step: 0.01 });
+fMotion.addBinding(P, 'fixedStep', { label: 'frame-exact (slow-mo)' });
 fMotion.addBinding(P, 'loopSeconds', { label: 'loop seconds', min: 4, max: 60, step: 1 });
 fMotion.addBinding(P, 'flow', { min: 0, max: 3, step: 0.01 });
 fMotion.addBinding(P, 'previewScale', { label: 'preview scale', min: 0.25, max: 1, step: 0.05 });
@@ -553,9 +659,12 @@ fVid.addBinding(P, 'videoSize', { label: 'size', options: {
 fVid.addBinding(P, 'videoFps', { label: 'fps', options: { '24': 24, '30': 30, '60': 60 } });
 fVid.addBinding(P, 'videoLoops', { label: 'loops', min: 1, max: 8, step: 1 });
 fVid.addBinding(P, 'videoBitrate', { label: 'bitrate Mbps', min: 2, max: 80, step: 1 });
-fVid.addBinding(P, 'videoFormat', { label: 'format', options: { 'MP4 (offline, WebCodecs)': 'mp4', 'WebM (real-time)': 'webm' } });
+fVid.addBinding(P, 'videoFormat', { label: 'format', options: {
+  'MP4 (offline, frame-exact)': 'mp4', 'WebM (real-time, may drop frames)': 'webm',
+  'WebM slow-mo (speed up after)': 'webm-slow', 'PNG sequence (frame-exact)': 'png-seq',
+} });
 fVid.addBinding(P, 'videoSS', { label: 'supersampling', options: { '1×': 1, '2×': 2 } });
-fVid.addBinding(info, 'video', { readonly: true, label: 'output' });
+fVid.addBinding(info, 'video', { readonly: true, label: 'output', multiline: true, rows: 4 });
 const vidBtn = fVid.addButton({ title: 'Export video (V)' });
 vidBtn.on('click', () => exportVideo());
 const vidCancel = fVid.addButton({ title: 'Cancel export' });
@@ -572,8 +681,9 @@ function setBusy(b) {
 setBusy(false);
 
 function refreshTime() {
+  const t = P.time;
   suppress = true;
-  try { timeBinding.refresh(); } finally { suppress = false; }
+  try { timeBinding.refresh(); } finally { suppress = false; P.time = t; }
 }
 
 /** loopSeconds changed: clamp time and rebuild the time slider with the new range. */
@@ -613,6 +723,7 @@ function onKey(e) {
   else if (k === 's' || k === 'S') exportStill();
   else if (k === 'v' || k === 'V') exportVideo();
   else if (k === 'p' || k === 'P') quickSnapshot();
+  else if (k === 'f' || k === 'F') { P.fixedStep = !P.fixedStep; stepAcc = 0; refreshPane(); requestDraw(); }
   else if (k === 'z' || k === 'Z') { P.view = P.view === 'fit' ? 'actual' : 'fit'; refreshPane(); requestDraw(); }
   else if (k === 'Escape' && P.view !== 'fit') { P.view = 'fit'; refreshPane(); requestDraw(); }
   else return;
@@ -680,5 +791,5 @@ window.marble = {
   snapshot: quickSnapshot,
   randomize: randomizeParams,
   reset: resetParams,
-  renderer,
+  renderer, info,
 };
