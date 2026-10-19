@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>006 Contour Silk</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #1a1a1a; color: #aaa; font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace; overflow: hidden; }
+    #stage { position: fixed; inset: 0 330px 22px 0; display: flex; align-items: center; justify-content: center; }
+    @media (max-width: 900px) { #stage { right: 0; } }
+    #stage canvas { display: block; image-rendering: auto; box-shadow: 0 0 0 1px #333; cursor: zoom-in; touch-action: none; }
+    #status { position: fixed; left: 12px; right: 340px; bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #888; }
+    #pane { position: fixed; top: 8px; right: 8px; width: 310px; max-height: calc(100vh - 16px); overflow-y: auto; z-index: 10; }
+    a.back { position: fixed; top: 8px; left: 12px; color: #666; text-decoration: none; z-index: 5; }
+    a.back:hover { color: #ddd; }
+  </style>
+</head>
+<body>
+  <a class="back" href="../../">&larr; index</a>
+  <div id="stage"></div>
+  <div id="pane"></div>
+  <div id="status">loading…</div>
+  <script type="module" src="sketch.js"></script>
+</body>
+</html>
