@@ -34,7 +34,7 @@
 //      a margin away from region boundaries. Colour: hash(droplet, region index),
 //      never the parent region's colour.
 //   6. outline: every boundary distance is (field value) / |exact gradient| in
-//      normalized units, so the line (constant width, P.outlineWidth * 0.0012 of
+//      normalized units, so the line (constant width, P.outlineWidth * 0.0015 of
 //      the short side) and the anti-aliasing are resolution-independent and
 //      identical across tiles, crops and supersampling. Line coverage is a box
 //      filter of the line strip, so sub-pixel lines stay correct in tone.
