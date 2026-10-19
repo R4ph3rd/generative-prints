@@ -12,19 +12,21 @@
 // Per sample:
 //   1. camera (zoom / pan / scale) and an anisotropic squash along P.angle
 //      (P.stretch) map p to field space x (as 004).
-//   2. advection (as 004): P.warpIterations passes, each moving the sample point a
-//      in 4 small Euler steps along a twisted smooth noise velocity field (P.warp).
+//   2. advection (after 004): P.warpIterations passes, each moving the sample point
+//      a in one Euler step along a twisted smooth noise velocity field (P.warp).
 //      The Jacobian da/dx is carried exactly, so every field below has an exact
 //      analytic gradient wrt p (no screen-space derivatives): line widths and
 //      anti-aliasing are identical across tiles, crops and supersampling.
 //      Motion: every noise octave samples 3D simplex noise along a loop-periodic
 //      circle (radius ~ P.flow), so t and t + loopSeconds are bit-identical.
 //   3. height field (in "line units", lines at integer u):
-//        H = ramp(a.y) + A fbm(a) + F soft|fbm2(a)|
+//        H = ramp(a.y) + A fbm(a) + C(x) tanh(fbm2(a) / eps)
 //      the ramp across the stretch direction combs the contours into long sweeping
 //      parallel lines, the fbm bumps close them into elongated loops around local
-//      extrema, the soft-abs fold kinks them into cusps / chevrons; the advection
-//      compresses whole bundles of lines into dense creases.
+//      extrema, the tanh cliffs (faded in / out along their length by an envelope)
+//      pull bundles of lines into narrow luminous seams with sharp hooks / cusps;
+//      the (single big step per pass) advection folds and compresses whole bundles
+//      of lines into broader bright creases.
 //      Ribbons: a separate low-frequency field r (not advected) gives meandering
 //      zero curves; |r| (scaled to distance) < a tapering half width = empty ribbon
 //      (lens-shaped where the width modulation fades out). Outside, H gets a term
@@ -48,8 +50,8 @@
 //   6. exposure in linear light; encode sRGB, contrast; optional static grain;
 //      triangular dither.
 //
-// Cost at defaults (warpIterations 2, families 1): ~22 simplex-noise evaluations
-// per sample (16 advection, 3 + 2 height, 1 + 1 ribbon) — about the same as 004.
+// Cost at defaults (warpIterations 2, families 1): ~14 simplex-noise evaluations
+// per sample (4 advection, 2 + 2 + 1 height / cliffs, 2 + 1 ribbon) — cheaper than 004.
 
 const VERT = `#version 300 es
 in vec2 aPos;
@@ -633,7 +635,7 @@ export class ContourRenderer {
     gl.uniform1f(U.uRibDist, 1 / (0.75 * k));
     gl.uniform1f(U.uRibW, (0.01 + 0.1 * rw) / zoom);
     gl.uniform1f(U.uRibBias, -1.1 + 2.2 * rib);
-    gl.uniform1f(U.uRibS, N * 1.3 * num(P.dbgRibS, 4) * Math.min(1, rib * 4));
+    gl.uniform1f(U.uRibS, N * 1.3 * num(P.dbgRibS, 8) * Math.min(1, rib * 4));
     gl.uniform1f(U.uRibL, num(P.dbgRibL, 0.03 + 0.03 * rw) / zoom);
     gl.uniform1f(U.uRibEdge, clamp(num(P.ribbonEdge, 0.6), 0, 1));
 
