@@ -384,7 +384,8 @@ async function exportVideo(opts = {}) {
       });
       if (blob && !opts.noDownload) {
         // 'auto' may have fallen back to WebM (no H.264 encoder): name the file after what it really is
-        downloadBlob(blob, /webm/.test(blob.type) ? filename.replace(/\.mp4$/, '.webm') : filename);
+        if (/webm/.test(blob.type)) filename = filename.replace(/\.mp4$/, '.webm');
+        downloadBlob(blob, filename);
       }
     } else if (format === 'png-seq') {
       const stem = filename.replace(/\.[^.]+$/, '');
