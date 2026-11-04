@@ -74,9 +74,10 @@ const DEFAULTS = {
   videoSize: '1080x1350',
   videoFps: 30,
   videoLoops: 1,
-  videoBitrate: 16,
+  videoBitrate: 40,
   videoFormat: 'mp4',
   videoSS: 1,
+  videoGrain: 2,       // grain cell multiplier in videos: per-frame grain finer than ~2 px is mush after H.264
   // preview
   view: 'fit',
 };
@@ -306,11 +307,14 @@ function quickSnapshot(opts = {}) {
 }
 
 // ----------------------------------------------------------------------------- video export
+/** P for video frames: coarser grain so it survives the encoder (stills keep the print-size grain). */
+const videoP = () => ({ ...P, grainSize: P.grainSize * P.videoGrain });
+
 const fmtDur = (s) => { s = Math.max(0, Math.round(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 
 /** Draw frame i of the export, then block until the GPU has finished it (for timing). */
 function drawAndSync(i, fpsV, vw, vh) {
-  renderer.draw({ P, t: wrapT(i / fpsV), w: vw, h: vh, ss: P.videoSS });
+  renderer.draw({ P: videoP(), t: wrapT(i / fpsV), w: vw, h: vh, ss: P.videoSS });
   const gl = renderer.gl;
   gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
 }
@@ -375,7 +379,7 @@ async function exportVideo(opts = {}) {
         width: vw, height: vh, fps: fpsV, frameCount,
         renderFrame: async (i) => {
           // frame i at t = i/fps (never t = duration), so the file loops seamlessly
-          renderer.draw({ P, t: wrapT(i / fpsV), w: vw, h: vh, ss: P.videoSS });
+          renderer.draw({ P: videoP(), t: wrapT(i / fpsV), w: vw, h: vh, ss: P.videoSS });
           return renderer.canvas;
         },
         bitrate, container: 'auto',
@@ -388,7 +392,8 @@ async function exportVideo(opts = {}) {
       });
       if (blob && !opts.noDownload) {
         // 'auto' may have fallen back to WebM (no H.264 encoder): name the file after what it really is
-        downloadBlob(blob, /webm/.test(blob.type) ? filename.replace(/\.mp4$/, '.webm') : filename);
+        if (/webm/.test(blob.type)) filename = filename.replace(/\.mp4$/, '.webm');
+        downloadBlob(blob, filename);
       }
     } else if (format === 'png-seq') {
       const stem = filename.replace(/\.[^.]+$/, '');
@@ -397,7 +402,7 @@ async function exportVideo(opts = {}) {
       const res = await exportFrameSequence({
         fps: fpsV, frameCount, name: stem, dirHandle,
         renderFrame: async (i) => {
-          renderer.draw({ P, t: wrapT(i / fpsV), w: vw, h: vh, ss: P.videoSS });
+          renderer.draw({ P: videoP(), t: wrapT(i / fpsV), w: vw, h: vh, ss: P.videoSS });
           return renderer.canvas; // encoded right after this returns, same task, buffer preserved
         },
         ffmpegOut: `${stem}.mp4`,
@@ -432,7 +437,7 @@ async function exportVideo(opts = {}) {
       blob = await recordCanvasFrames({
         canvas: renderer.canvas, frameCount, slotMs, bitrate,
         mimeType: sup.webmMime || undefined,
-        renderFrame: (i) => { renderer.draw({ P, t: wrapT(i / fpsV), w: vw, h: vh, ss: P.videoSS }); },
+        renderFrame: (i) => { renderer.draw({ P: videoP(), t: wrapT(i / fpsV), w: vw, h: vh, ss: P.videoSS }); },
         filename: opts.noDownload ? undefined : filename,
         signal: abortCtl.signal,
         onProgress: ({ frame, total }) => {
@@ -447,10 +452,10 @@ async function exportVideo(opts = {}) {
       // real-time: the canvas is animated here while MediaRecorder captures it
       let stop = false;
       const rtStart = performance.now();
-      renderer.draw({ P, t: 0, w: vw, h: vh, ss: P.videoSS });
+      renderer.draw({ P: videoP(), t: 0, w: vw, h: vh, ss: P.videoSS });
       const tick = () => {
         if (stop) return;
-        renderer.draw({ P, t: wrapT((performance.now() - rtStart) / 1000), w: vw, h: vh, ss: P.videoSS });
+        renderer.draw({ P: videoP(), t: wrapT((performance.now() - rtStart) / 1000), w: vw, h: vh, ss: P.videoSS });
         requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick);
@@ -549,7 +554,7 @@ function resetParams() {
   const keep = {
     paper: P.paper, orientation: P.orientation, dpi: P.dpi, customW: P.customW, customH: P.customH, stillSS: P.stillSS,
     videoSize: P.videoSize, videoFps: P.videoFps, videoLoops: P.videoLoops, videoBitrate: P.videoBitrate,
-    videoFormat: P.videoFormat, videoSS: P.videoSS, view: P.view, seed: P.seed, time: 0, playing: P.playing,
+    videoFormat: P.videoFormat, videoSS: P.videoSS, videoGrain: P.videoGrain, view: P.view, seed: P.seed, time: 0, playing: P.playing,
   };
   Object.assign(P, DEFAULTS, keep);
   afterParamsChanged();
@@ -658,12 +663,13 @@ fVid.addBinding(P, 'videoSize', { label: 'size', options: {
 } });
 fVid.addBinding(P, 'videoFps', { label: 'fps', options: { '24': 24, '30': 30, '60': 60 } });
 fVid.addBinding(P, 'videoLoops', { label: 'loops', min: 1, max: 8, step: 1 });
-fVid.addBinding(P, 'videoBitrate', { label: 'bitrate Mbps', min: 2, max: 80, step: 1 });
+fVid.addBinding(P, 'videoBitrate', { label: 'bitrate Mbps', min: 2, max: 150, step: 1 });
 fVid.addBinding(P, 'videoFormat', { label: 'format', options: {
   'MP4 (offline, frame-exact)': 'mp4', 'WebM (real-time, may drop frames)': 'webm',
   'WebM slow-mo (speed up after)': 'webm-slow', 'PNG sequence (frame-exact)': 'png-seq',
 } });
 fVid.addBinding(P, 'videoSS', { label: 'supersampling', options: { '1×': 1, '2×': 2 } });
+fVid.addBinding(P, 'videoGrain', { label: 'grain size ×', options: { '1× (as print)': 1, '1.5×': 1.5, '2×': 2, '3×': 3 } });
 fVid.addBinding(info, 'video', { readonly: true, label: 'output', multiline: true, rows: 4 });
 const vidBtn = fVid.addButton({ title: 'Export video (V)' });
 vidBtn.on('click', () => exportVideo());
