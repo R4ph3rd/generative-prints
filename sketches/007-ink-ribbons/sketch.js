@@ -7,7 +7,7 @@
 import { Pane } from 'https://cdn.jsdelivr.net/npm/tweakpane@4.0.5/dist/tweakpane.min.js';
 import { PALETTES, buildScene } from './scene.js';
 import { RibbonRenderer } from './ribbon-2d.js';
-import { DEFAULTS, PRESETS, FORMATS, formatSize, paletteColors } from './params.js';
+import { DEFAULTS, PRESETS, FORMATS, formatSize, paletteColors, presetLook } from './params.js';
 import { exportPosterPNG, downloadJSON, pickJSONFile, downloadBlob } from '../../lib/poster-export.js';
 import {
   exportVideo as encodeVideo, recordCanvas, recordCanvasFrames, slowdownFor, videoSupport, videoFilename,
@@ -441,33 +441,52 @@ const r2 = (v) => +v.toFixed(2);
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
 function randomizeParams() {
-  const layout = pick(['columns', 'columns', 'meander', 'rows']);
+  const frames = Math.random() < 0.25;
+  const layout = pick(['tangle', 'tangle', 'tangle', 'columns', 'meander', 'rows']);
   const palette = pick(Object.keys(PALETTES));
+  const surface = layout === 'tangle' || frames || Math.random() < 0.5;
   Object.assign(P, {
+    composition: frames ? 'frames' : 'full',
+    borderMargin: frames ? r2(rnd(0.07, 0.14)) : pick([0, 0.04, 0.06, 0.08]),
+    border: frames || Math.random() < 0.6,
+    backdrop: !frames && Math.random() < 0.6,
+    cellCount: rndInt(8, 24),
+    cellIrregular: r2(rnd(0.1, 0.6)),
+    cellJag: r2(rnd(0, 0.7)),
+    cellRibbons: rndInt(1, 3),
+    cellSpacing: r2(rnd(5, 10)),
+    cellCurl: r2(rnd(0.3, 1.2)),
     layout,
-    ribbonCount: layout === 'meander' ? pick([1, 1, 2, 3]) : rndInt(2, 6),
-    ribbonWidth: r2(rnd(0.45, 0.9)),
+    ribbonCount: layout === 'tangle' ? rndInt(3, 9) : layout === 'meander' ? pick([1, 1, 2, 3]) : rndInt(2, 6),
+    ribbonWidth: r2(rnd(0.5, 1.2)),
     sway: r2(rnd(0.1, 0.6)),
     meander: r2(rnd(0.4, 0.8)),
     turns: r2(rnd(1, 2.4)),
-    pinches: r2(rnd(layout === 'meander' ? 1.5 : 3, layout === 'meander' ? 3.5 : 7)),
+    pathLength: r2(rnd(1.2, 2.4)),
+    curl: r2(rnd(0.5, 1.6)),
+    pinches: r2(layout === 'columns' || layout === 'rows' ? rnd(3, 7) : rnd(1.5, 4)),
     twistNoise: r2(rnd(0.3, 1.4)),
-    cup: r2(rnd(0, 0.7)),
+    cup: r2(rnd(0, 0.9)),
     cupVar: r2(rnd(0.2, 1)),
     tilt: r2(rnd(0, 0.5)),
-    widthVar: r2(rnd(0.1, 0.5)),
-    lines: rndInt(14, 44),
+    widthVar: r2(rnd(0.1, 0.6)),
+    fan: pick([1, 1, 1, r2(rnd(1.3, 2.5))]),
+    ruffle: pick([0, 0, r2(rnd(0.1, 0.6))]),
+    surface,
+    lines: rndInt(16, 44),
     spread: r2(rnd(0.8, 1.3)),
-    lineWidth: r2(layout === 'meander' ? rnd(1.2, 3) : rnd(0.7, 1.8)),
-    lineWidthVar: r2(rnd(0.1, 0.6)),
+    lineWidth: r2(layout === 'meander' ? rnd(1.2, 3) : rnd(0.8, 2)),
+    lineWidthVar: r2(rnd(0.1, 0.5)),
     edgeWeight: r2(rnd(1, 2.2)),
+    coreWeight: pick([1, 1, 1, r2(rnd(2, 6))]),
     pressure: r2(rnd(0, 0.5)),
-    dashMix: pick([0, 0, 0, 0.3, 0.5, 1]),
-    axisLine: Math.random() < 0.25,
+    shade: r2(rnd(0, 1.5)),
+    lineOpacity: surface ? 1 : r2(rnd(0.75, 1)),
+    dashMix: pick([0, 0, 0, 0, 0.3, 0.5]),
+    axisLine: Math.random() < 0.15,
     accentRatio: pick([0, 0, 0.05, 0.12]),
-    echoCount: pick([0, 0, 1, 2]),
-    border: layout !== 'meander' && Math.random() < 0.7,
-    shapes: Math.random() < 0.5,
+    echoCount: surface ? 0 : pick([0, 0, 1, 2]),
+    shapes: Math.random() < 0.35,
     shapeStyle: pick(['watercolor', 'watercolor', 'flat']),
     shapeCount: rndInt(3, 14),
     shapeSize: r2(rnd(0.6, 1.4)),
@@ -475,13 +494,14 @@ function randomizeParams() {
     palette,
     ...paletteColors(palette),
   });
+  lastPalette = P.palette;
   afterParamsChanged();
 }
 
 function applyPreset(name) {
-  const pr = PRESETS[name];
-  if (!pr) return;
-  Object.assign(P, pr, paletteColors(pr.palette));
+  const look = presetLook(name);
+  if (!look) return;
+  Object.assign(P, look);
   lastPalette = P.palette;
   afterParamsChanged();
 }
@@ -518,20 +538,44 @@ fSeed.addButton({ title: 'Randomize params (Shift+R)' }).on('click', randomizePa
 fSeed.addButton({ title: 'Reset to defaults' }).on('click', resetParams);
 for (const name of Object.keys(PRESETS)) fSeed.addButton({ title: `Preset: ${name}` }).on('click', () => applyPreset(name));
 
-const fLayout = pane.addFolder({ title: 'Layout' });
+const fComp = pane.addFolder({ title: 'Composition' });
 const fmtOpts = {};
 for (const [k, v] of Object.entries(FORMATS)) fmtOpts[v.label] = k;
-fLayout.addBinding(P, 'format', { options: fmtOpts });
-fLayout.addBinding(P, 'layout', { options: { 'vertical columns': 'columns', 'meander (S-curves)': 'meander', 'horizontal rows': 'rows' } });
-fLayout.addBinding(P, 'ribbonCount', { label: 'ribbons', min: 1, max: 10, step: 1 });
-fLayout.addBinding(P, 'ribbonWidth', { label: 'ribbon width', min: 0.1, max: 1.5, step: 0.01 });
+fComp.addBinding(P, 'format', { options: fmtOpts });
+fComp.addBinding(P, 'composition', { options: { 'full page': 'full', 'frames mosaic': 'frames' } });
+fComp.addBinding(P, 'borderMargin', { label: 'padding', min: 0, max: 0.25, step: 0.005 });
+fComp.addBinding(P, 'backdrop', { label: 'coloured backdrop' });
+fComp.addBinding(P, 'border', { label: 'frame line' });
+fComp.addBinding(P, 'borderWidth', { label: 'frame width px', min: 0.3, max: 10, step: 0.1 });
+fComp.addBinding(P, 'clipToFrame', { label: 'clip to padding' });
+
+const fCells = pane.addFolder({ title: 'Frames mosaic', expanded: false });
+fCells.addBinding(P, 'cellCount', { label: 'frames', min: 1, max: 40, step: 1 });
+fCells.addBinding(P, 'cellGap', { label: 'gap', min: 0, max: 0.06, step: 0.001 });
+fCells.addBinding(P, 'cellIrregular', { label: 'size irregularity', min: 0, max: 1, step: 0.01 });
+fCells.addBinding(P, 'cellJag', { label: 'jagged outline', min: 0, max: 1, step: 0.01 });
+fCells.addBinding(P, 'tinyCell', { label: 'solid below', min: 0, max: 0.12, step: 0.001 });
+fCells.addBinding(P, 'cellRibbons', { label: 'ribbons / frame', min: 1, max: 5, step: 1 });
+fCells.addBinding(P, 'cellFill', { label: 'ribbon width', min: 0.3, max: 2.5, step: 0.01 });
+fCells.addBinding(P, 'cellSpacing', { label: 'line spacing px', min: 2, max: 20, step: 0.1 });
+fCells.addBinding(P, 'cellCurl', { label: 'curl', min: 0, max: 3, step: 0.01 });
+fCells.addBinding(P, 'cellPinches', { label: 'pinches', min: 0, max: 6, step: 0.1 });
+
+const fLayout = pane.addFolder({ title: 'Layout (full page)' });
+fLayout.addBinding(P, 'layout', { options: { 'tangle (free paths)': 'tangle', 'vertical columns': 'columns', 'meander (S-curves)': 'meander', 'horizontal rows': 'rows' } });
+fLayout.addBinding(P, 'ribbonCount', { label: 'ribbons', min: 1, max: 16, step: 1 });
+fLayout.addBinding(P, 'ribbonWidth', { label: 'ribbon width', min: 0.1, max: 2.5, step: 0.01 });
+fLayout.addBinding(P, 'pathLength', { label: 'path length', min: 0.5, max: 4, step: 0.01 });
+fLayout.addBinding(P, 'curl', { min: 0, max: 3, step: 0.01 });
+fLayout.addBinding(P, 'curlFreq', { label: 'curl freq', min: 0.2, max: 4, step: 0.01 });
+fLayout.addBinding(P, 'weave', { label: 'over / under', min: 0, max: 3, step: 0.01 });
 fLayout.addBinding(P, 'margin', { min: 0, max: 0.25, step: 0.005 });
 fLayout.addBinding(P, 'sway', { min: 0, max: 1.5, step: 0.01 });
 fLayout.addBinding(P, 'swayFreq', { label: 'sway freq', min: 0.2, max: 5, step: 0.01 });
 fLayout.addBinding(P, 'meander', { label: 'meander amp', min: 0, max: 1.2, step: 0.01 });
 fLayout.addBinding(P, 'turns', { label: 'meander turns', min: 0.3, max: 4, step: 0.01 });
 
-const fTwist = pane.addFolder({ title: 'Twist' });
+const fTwist = pane.addFolder({ title: 'Twist & shape' });
 fTwist.addBinding(P, 'pinches', { min: 0, max: 14, step: 0.1 });
 fTwist.addBinding(P, 'pinchJitter', { label: 'pinch jitter', min: 0, max: 1, step: 0.01 });
 fTwist.addBinding(P, 'twistNoise', { label: 'twist noise', min: 0, max: 3, step: 0.01 });
@@ -540,14 +584,21 @@ fTwist.addBinding(P, 'cupVar', { label: 'cup variation', min: 0, max: 2, step: 0
 fTwist.addBinding(P, 'tilt', { min: -1, max: 1.2, step: 0.01 });
 fTwist.addBinding(P, 'widthVar', { label: 'width variation', min: 0, max: 1, step: 0.01 });
 fTwist.addBinding(P, 'widthFreq', { label: 'width freq', min: 0.2, max: 8, step: 0.01 });
+fTwist.addBinding(P, 'fan', { label: 'fan (to core edge)', min: 0.4, max: 4, step: 0.01 });
+fTwist.addBinding(P, 'ruffle', { min: 0, max: 1.5, step: 0.01 });
+fTwist.addBinding(P, 'ruffleFreq', { label: 'ruffle freq', min: 1, max: 30, step: 0.1 });
 
 const fLines = pane.addFolder({ title: 'Lines' });
+fLines.addBinding(P, 'surface', { label: 'opaque ribbons (depth)' });
+fLines.addBinding(P, 'fillOpacity', { label: 'ribbon fill', min: 0, max: 1, step: 0.01 });
 fLines.addBinding(P, 'lines', { label: 'lines / ribbon', min: 2, max: 120, step: 1 });
 fLines.addBinding(P, 'spread', { label: 'spread (edge ↔ centre)', min: 0.4, max: 2.5, step: 0.01 });
 fLines.addBinding(P, 'lineJitter', { label: 'spacing jitter', min: 0, max: 1, step: 0.01 });
 fLines.addBinding(P, 'lineWidth', { label: 'line width px', min: 0.2, max: 8, step: 0.05 });
 fLines.addBinding(P, 'lineWidthVar', { label: 'width variation', min: 0, max: 1, step: 0.01 });
 fLines.addBinding(P, 'edgeWeight', { label: 'edge weight', min: 0.3, max: 5, step: 0.05 });
+fLines.addBinding(P, 'coreWeight', { label: 'core line weight', min: 0.3, max: 12, step: 0.05 });
+fLines.addBinding(P, 'shade', { label: 'fold shading', min: 0, max: 3, step: 0.01 });
 fLines.addBinding(P, 'pressure', { label: 'pen pressure', min: 0, max: 1, step: 0.01 });
 fLines.addBinding(P, 'depthWidth', { label: 'depth width', min: 0, max: 1.5, step: 0.01 });
 fLines.addBinding(P, 'lineOpacity', { label: 'opacity', min: 0.05, max: 1, step: 0.01 });
@@ -565,13 +616,7 @@ fAcc.addBinding(P, 'echoWobble', { label: 'echo wobble', min: 0, max: 1.5, step:
 fAcc.addBinding(P, 'echoWidth', { label: 'echo width px', min: 0.2, max: 5, step: 0.05 });
 fAcc.addBinding(P, 'echoOpacity', { label: 'echo opacity', min: 0, max: 1, step: 0.01 });
 
-const fFrame = pane.addFolder({ title: 'Frame', expanded: false });
-fFrame.addBinding(P, 'border', { label: 'border' });
-fFrame.addBinding(P, 'borderMargin', { label: 'border margin', min: 0, max: 0.2, step: 0.005 });
-fFrame.addBinding(P, 'borderWidth', { label: 'border width px', min: 0.3, max: 10, step: 0.1 });
-fFrame.addBinding(P, 'clipToFrame', { label: 'clip ribbons to frame' });
-
-const fShapes = pane.addFolder({ title: 'Background shapes' });
+const fShapes = pane.addFolder({ title: 'Background shapes', expanded: false });
 fShapes.addBinding(P, 'shapes', { label: 'show shapes' });
 fShapes.addBinding(P, 'shapeStyle', { label: 'style', options: { watercolour: 'watercolor', flat: 'flat', outline: 'outline' } });
 fShapes.addBinding(P, 'shapeCount', { label: 'count', min: 0, max: 40, step: 1 });
@@ -586,7 +631,8 @@ const fColour = pane.addFolder({ title: 'Colour' });
 const paletteOpts = {};
 for (const [k, v] of Object.entries(PALETTES)) paletteOpts[v.label || k] = k;
 fColour.addBinding(P, 'palette', { options: paletteOpts });
-fColour.addBinding(P, 'ground', { label: 'paper' });
+fColour.addBinding(P, 'ground', { label: 'paper / ribbon fill' });
+fColour.addBinding(P, 'backdropColor', { label: 'backdrop' });
 fColour.addBinding(P, 'ink');
 fColour.addBinding(P, 'accent');
 fColour.addBinding(P, 'echo');

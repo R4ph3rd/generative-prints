@@ -23,11 +23,11 @@
   <script type="module">
     import { buildScene } from './scene.js';
     import { RibbonRenderer } from './ribbon-2d.js';
-    import { DEFAULTS, PRESETS, paletteColors, formatSize } from './params.js';
+    import { DEFAULTS, presetLook, paletteColors, formatSize } from './params.js';
 
     const q = new URLSearchParams(location.search);
     const P = { ...DEFAULTS };
-    if (q.has('preset')) { const pr = PRESETS[q.get('preset')]; Object.assign(P, pr, paletteColors(pr.palette)); }
+    if (q.has('preset')) Object.assign(P, presetLook(q.get('preset')));
     if (q.has('palette')) Object.assign(P, paletteColors(q.get('palette')));
     for (const [k, v] of q) {
       if (!(k in DEFAULTS)) continue;

@@ -14,58 +14,69 @@
 export const MAX_SHAPES = 40;
 export const WASH_LAYERS = 22;
 
-// ground, ink (main lines), accent (highlight lines), echo (offset outlines),
-// wash (background shape colours), frame (border)
+// ground (paper, also the fill of opaque ribbons), ink (main lines), accent (highlight
+// lines), echo (offset outlines), wash (background shape colours), frame (border),
+// backdrop (coloured background inside the padding, full-page composition)
 export const PALETTES = {
+  cobalt: {
+    label: 'Cobalt & ink',
+    ground: '#f5f3ef', ink: '#141414', accent: '#3c4fd9', echo: '#8a8a8a',
+    wash: ['#9aa7f0', '#3c4fd9', '#c9cff7'], frame: '#141414', backdrop: '#3c4fd9',
+  },
+  vermilion: {
+    label: 'Vermilion',
+    ground: '#f7f4ee', ink: '#1a1a1a', accent: '#e8432b', echo: '#f29a7f',
+    wash: ['#f6b3a3', '#e8432b', '#ffd6c9'], frame: '#1a1a1a', backdrop: '#e8432b',
+  },
   carmine: {
     label: 'Carmine pen',
     ground: '#f3f1ec', ink: '#c4122f', accent: '#7d0a1f', echo: '#e86a7d',
-    wash: ['#f6c9cf', '#f0a5ae', '#e07a88'], frame: '#1e1e1e',
+    wash: ['#f6c9cf', '#f0a5ae', '#e07a88'], frame: '#1e1e1e', backdrop: '#1f2a44',
   },
   sumi: {
     label: 'Sumi & coral',
     ground: '#efebe2', ink: '#2c2b2a', accent: '#d6262c', echo: '#e3825c',
-    wash: ['#f2a184', '#ec8a6e', '#8e3d55'], frame: '#2c2b2a',
+    wash: ['#f2a184', '#ec8a6e', '#8e3d55'], frame: '#2c2b2a', backdrop: '#3c4fd9',
   },
   indigo: {
     label: 'Indigo ink',
     ground: '#f0ece3', ink: '#1d2a5b', accent: '#c8553d', echo: '#6f86c6',
-    wash: ['#a9bde0', '#e6b09c', '#3a4f8f'], frame: '#1d2a5b',
+    wash: ['#a9bde0', '#e6b09c', '#3a4f8f'], frame: '#1d2a5b', backdrop: '#e2a93b',
   },
   tricolore: {
     label: 'Tricolore',
     ground: '#f4f1ee', ink: '#1b2a6b', accent: '#d9434f', echo: '#3a5bbf',
-    wash: ['#e98b93', '#9fb0e6', '#d9434f'], frame: '#1b2a6b',
+    wash: ['#e98b93', '#9fb0e6', '#d9434f'], frame: '#1b2a6b', backdrop: '#d9434f',
   },
   sunset: {
     label: 'Sunset',
     ground: '#2a0f2b', ink: '#fff1e0', accent: '#ff6f5e', echo: '#ffd23f',
-    wash: ['#8e3b6e', '#ff6f5e', '#f7a072'], frame: '#f7a072',
+    wash: ['#8e3b6e', '#ff6f5e', '#f7a072'], frame: '#f7a072', backdrop: '#ff6f5e',
   },
   lagoon: {
     label: 'Lagoon',
     ground: '#06213f', ink: '#e9f7f4', accent: '#18b5b0', echo: '#7fe3d8',
-    wash: ['#18b5b0', '#0b2f5c', '#e9d8b4'], frame: '#7fe3d8',
+    wash: ['#18b5b0', '#0b2f5c', '#e9d8b4'], frame: '#7fe3d8', backdrop: '#18b5b0',
   },
   sepia: {
     label: 'Sepia',
     ground: '#efe4cf', ink: '#4a2e1d', accent: '#a0522d', echo: '#c08a5a',
-    wash: ['#d9b88f', '#c9906a', '#7a4a2e'], frame: '#4a2e1d',
+    wash: ['#d9b88f', '#c9906a', '#7a4a2e'], frame: '#4a2e1d', backdrop: '#7a8f6b',
   },
   forest: {
     label: 'Forest',
     ground: '#eef0e6', ink: '#1f3a2b', accent: '#d98c2b', echo: '#6f9c7a',
-    wash: ['#b7cfa8', '#e3c07a', '#4d7a5c'], frame: '#1f3a2b',
+    wash: ['#b7cfa8', '#e3c07a', '#4d7a5c'], frame: '#1f3a2b', backdrop: '#d98c2b',
   },
   blush: {
     label: 'Blush',
     ground: '#f7ece8', ink: '#3b2c4f', accent: '#e2557a', echo: '#9b7fc0',
-    wash: ['#f2b8c6', '#d9c2ef', '#f6d6a8'], frame: '#3b2c4f',
+    wash: ['#f2b8c6', '#d9c2ef', '#f6d6a8'], frame: '#3b2c4f', backdrop: '#3b2c4f',
   },
   noir: {
     label: 'Noir',
     ground: '#111111', ink: '#ecebe6', accent: '#e0533a', echo: '#8a8a8a',
-    wash: ['#3a3a3a', '#5a2a24', '#2a2a2a'], frame: '#ecebe6',
+    wash: ['#3a3a3a', '#5a2a24', '#2a2a2a'], frame: '#ecebe6', backdrop: '#c8382b',
   },
 };
 
