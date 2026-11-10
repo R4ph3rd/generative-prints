@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>007 Ink Ribbons · dev harness</title>
+  <!--
+    Standalone renderer test page (no UI). Query overrides any DEFAULTS key, plus:
+      preset=<name>   apply a preset first       w       output width (height from format)
+      t               time in seconds             ss      supersampling (1 | 2 | 4)
+      tiles=1         render via 2x2 renderRegion calls stitched together (seam check)
+      check=1         print loop diff (t=0 vs t=loopSeconds), seam diff and timing into #info
+    e.g. dev.html?preset=Ink%20meander%20%2B%20wash&seed=7&w=1080
+  -->
+  <style>
+    html, body { margin: 0; background: #222; }
+    canvas { display: block; }
+    #info { position: fixed; left: 8px; bottom: 8px; font: 12px/1.4 monospace; color: #0f0; background: #000c; padding: 4px 6px; white-space: pre; }
+    #info:empty { display: none; }
+  </style>
+</head>
+<body>
+  <div id="info"></div>
+  <script type="module">
+    import { buildScene } from './scene.js';
+    import { RibbonRenderer } from './ribbon-2d.js';
+    import { DEFAULTS, PRESETS, paletteColors, formatSize } from './params.js';
+
+    const q = new URLSearchParams(location.search);
+    const P = { ...DEFAULTS };
+    if (q.has('preset')) { const pr = PRESETS[q.get('preset')]; Object.assign(P, pr, paletteColors(pr.palette)); }
+    if (q.has('palette')) Object.assign(P, paletteColors(q.get('palette')));
+    for (const [k, v] of q) {
+      if (!(k in DEFAULTS)) continue;
+      const d = DEFAULTS[k];
+      P[k] = typeof d === 'number' ? +v : typeof d === 'boolean' ? v === '1' || v === 'true' : v;
+    }
+    const { width: W, height: H } = formatSize(P.format, +(q.get('w') || 1080));
+    const t = +(q.get('t') || 0), ss = +(q.get('ss') || 1);
+    const r = new RibbonRenderer();
+    r.setScene(buildScene(P.seed, P));
+    const info = document.getElementById('info');
+    const t0 = performance.now();
+    if (q.get('tiles') === '1') {
+      const out = document.createElement('canvas'); out.width = W; out.height = H;
+      const g = out.getContext('2d');
+      const hw = Math.ceil(W / 2), hh = Math.ceil(H / 2);
+      for (const [x, y] of [[0, 0], [hw, 0], [0, hh], [hw, hh]]) {
+        const w = Math.min(hw, W - x), h = Math.min(hh, H - y);
+        const d = r.renderRegion({ P, t, fullW: W, fullH: H, x, y, w, h, ss });
+        g.putImageData(new ImageData(new Uint8ClampedArray(d), w, h), x, y);
+      }
+      document.body.appendChild(out);
+    } else {
+      r.draw({ P, t, w: W, h: H, ss });
+      document.body.appendChild(r.canvas);
+    }
+    const ms = performance.now() - t0;
+    if (q.get('check') === '1') {
+      const a = r.renderRegion({ P, t: 0, fullW: W, fullH: H, x: 0, y: 0, w: W, h: H, ss: 1 }).slice();
+      const b = r.renderRegion({ P, t: P.loopSeconds, fullW: W, fullH: H, x: 0, y: 0, w: W, h: H, ss: 1 });
+      let loopDiff = 0; for (let i = 0; i < a.length; i++) loopDiff = Math.max(loopDiff, Math.abs(a[i] - b[i]));
+      const T = []; for (let i = 0; i < 5; i++) { const c = performance.now(); r.draw({ P, t: i * 0.1, w: W, h: H, ss }); r.sync(); T.push(performance.now() - c); }
+      info.textContent = `${W}x${H} first ${ms.toFixed(0)} ms · frames ${T.map((x) => x.toFixed(0)).join(' ')} ms · loop diff ${loopDiff} · ${r.stats.lines} lines ${r.stats.points} pts`;
+    }
+    window.renderer = r; window.P = P; window.done = true;
+  </script>
+</body>
+</html>
