@@ -8,7 +8,7 @@
 import { Pane } from 'https://cdn.jsdelivr.net/npm/tweakpane@4.0.5/dist/tweakpane.min.js';
 import { PALETTES, MAX_COLORS, buildScene, resolvePalette } from './scene.js';
 import { DEFAULTS, PRESETS, SLOT_KEYS, paletteColors, presetLook } from './params.js';
-import { OilRenderer } from './oil-gl.js';
+import { OilRenderer, driftBoostFor } from './oil-gl.js';
 import {
   PAPER_PRESETS, paperSizePx, posterFilename, exportPosterPNG, downloadJSON, pickJSONFile, downloadBlob,
 } from '../../lib/poster-export.js';
@@ -24,7 +24,7 @@ const STEP = 1 / 30; // seconds per `,` / `.` key press
 const P = { ...DEFAULTS };
 const info = {
   pixels: '', tiles: '', progress: 'idle', palette: '',
-  video: '', vprogress: 'idle',
+  video: '', vprogress: 'idle', plan: '', drift: '',
 };
 
 // ----------------------------------------------------------------------------- state
@@ -172,8 +172,25 @@ function updateInfo() {
   info.pixels = `${pp.width} × ${pp.height} px (${mp.toFixed(1)} MP) ${pp.widthMM.toFixed(0)}×${pp.heightMM.toFixed(0)} mm`;
   const tile = exportTileSize();
   info.tiles = `${Math.ceil(pp.width / tile) * Math.ceil(pp.height / tile)} tiles of ${tile}px · ${P.stillSS}× SS · 24-bit RGB PNG`;
-  const dur = P.videoLoops * P.loopSeconds;
-  const frames = Math.round(P.videoFps * dur);
+  const plan = videoPlan();
+  info.plan = planNote(plan);
+  // drift: a loop too short for the drift speed forces the slow layers faster (no visible repeats)
+  const phases = renderer?.scene?.phases;
+  if (phases) {
+    const out = outputPx();
+    const bp = driftBoostFor(P, out.width, out.height, phases);
+    info.drift = !(P.drift > 0) ? 'no drift' : bp > 1.001
+      ? `loop too short: big folds drift x${bp.toFixed(2)} faster (raise loop seconds to ~${Math.ceil(P.loopSeconds * bp)} s or drift)`
+      : `${P.drift} short sides/s · seamless`;
+    if (plan.speed && plan.VP !== P) {
+      const [vw, vh] = parseSize(P.videoSize);
+      const bv = driftBoostFor(plan.VP, vw, vh, phases);
+      if (bv > 1.001) info.plan += ` · drift x${bv.toFixed(2)} (loop ${plan.VP.loopSeconds.toFixed(1)} s too short)`;
+    }
+  }
+  const vt = videoTiming(P.videoFps, plan);
+  const dur = +vt.seconds.toFixed(1);
+  const frames = vt.frameCount;
   const mb = (P.videoBitrate * dur) / 8;
   const f = P.videoFormat;
   if (f === 'webm') info.video = `${dur} s real-time · ${frames} frames wanted, slow GPU drops some · ~${mb.toFixed(0)} MB`;
@@ -263,9 +280,76 @@ function quickSnapshot(opts = {}) {
 // ----------------------------------------------------------------------------- video export
 const fmtDur = (s) => { s = Math.max(0, Math.round(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 
+/**
+ * How a video of P.videoLength seconds is built from whole loops, so it always loops
+ * seamlessly. One loop lasts loopSeconds/speed seconds of video. The motion is a drift
+ * (P.drift, a velocity in short sides per second: each noise layer slides a whole number of
+ * its periods per loop, sized by the renderer from drift*loopSeconds) plus churn, a circle in
+ * noise space of radius ~flow travelled once per loop (visual speed ~ flow*speed/loopSeconds).
+ * videoFit:
+ *  'loop'  (default) exact length AND speed: the export uses its own loop period
+ *          L' = len*speed/n (n = whole loops nearest to len*speed/loopSeconds, at least 1)
+ *          and flow*L'/loopSeconds, so the motion moves as fast as the preview (drift is a
+ *          velocity, so it keeps its speed by itself). A shorter loop means a smaller churn
+ *          circle and shorter drift periods, so frames differ a little from the preview's;
+ *          if L' is too short for the drift, the renderer speeds the big folds up (see
+ *          driftBoostFor; the plan note says so).
+ *  'loops' keep speed and loop: nearest whole loop count, so the length is approximate.
+ *  'exact' keep the loop, nudge speed to n*loopSeconds/len.
+ * speed 0 holds the current frame for videoLength seconds.
+ * @param {number} [loopsOverride] force a loop count (testing; keeps speed and loop)
+ * @returns {{loops:number, speed:number, seconds:number, VP:object}} VP = params to render with
+ */
+function videoPlan(loopsOverride) {
+  const L = P.loopSeconds;
+  const len = Math.max(0.5, P.videoLength);
+  if (!(P.speed > 0)) return { loops: 0, speed: 0, seconds: len, VP: P };
+  const loops = loopsOverride || Math.max(1, Math.round((len * P.speed) / L));
+  const fit = loopsOverride ? 'loops' : P.videoFit;
+  if (fit === 'loop') {
+    const L2 = (len * P.speed) / loops;
+    return { loops, speed: P.speed, seconds: len, VP: { ...P, loopSeconds: L2, flow: (P.flow * L2) / L } };
+  }
+  const speed = fit === 'exact' ? (loops * L) / len : P.speed;
+  return { loops, speed, seconds: (loops * L) / speed, VP: P };
+}
+
+/**
+ * Frame timing for a plan. Frame times are spread evenly over the exact span of the
+ * plan's loops so frame N wraps onto frame 0 (seamless) even when fps*seconds is not an
+ * integer (the speed then differs from plan.speed by < half a frame over the video).
+ * @returns {{frameCount:number, seconds:number, tAt:(i:number)=>number, VP:object}}
+ */
+function videoTiming(fpsV, plan, frameCountOverride) {
+  const VP = plan.VP;
+  const Lp = VP.loopSeconds;
+  const wrap = (t) => ((t % Lp) + Lp) % Lp;
+  const seconds = frameCountOverride ? frameCountOverride / fpsV : plan.seconds;
+  const frameCount = frameCountOverride || Math.max(1, Math.round(fpsV * seconds));
+  let tAt;
+  if (!plan.speed) tAt = () => P.time;
+  else if (frameCountOverride) tAt = (i) => wrap((i * plan.speed) / fpsV);
+  // loop phase from integers: frame N is exactly phase 0 again (no float drift at the seam)
+  else tAt = (i) => (((i * plan.loops) % frameCount) / frameCount) * Lp;
+  return { frameCount, seconds, VP, tAt };
+}
+
+/** One-line description of the plan for the info monitor. */
+function planNote(plan) {
+  if (!plan.speed) return 'speed 0: still frame';
+  const n = `${plan.loops} loop${plan.loops > 1 ? 's' : ''}`;
+  if (plan.VP !== P) {
+    const L2 = plan.VP.loopSeconds;
+    return Math.abs(L2 - P.loopSeconds) < 1e-6 ? n : `${n} · loop ${P.loopSeconds} → ${L2.toFixed(2)} s, churn ×${(L2 / P.loopSeconds).toFixed(2)}`;
+  }
+  if (Math.abs(plan.speed - P.speed) > 1e-9) return `${n} · speed ${P.speed} → ${plan.speed.toFixed(3)}`;
+  const off = plan.seconds - P.videoLength;
+  return Math.abs(off) < 0.05 ? n : `${n} (${off > 0 ? '+' : ''}${off.toFixed(1)} s vs target)`;
+}
+
 /** Draw frame i of the export, then block until the GPU has finished it (for timing). */
-function drawAndSync(i, fpsV, vw, vh) {
-  renderer.draw({ P, t: wrapT(i / fpsV), w: vw, h: vh, ss: P.videoSS });
+function drawAndSync(i, tAt, VP, vw, vh) {
+  renderer.draw({ P: VP, t: tAt(i), w: vw, h: vh, ss: P.videoSS });
   const gl = renderer.gl;
   gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
 }
@@ -281,10 +365,8 @@ async function exportVideo(opts = {}) {
   if (opts.width) vw = opts.width;
   if (opts.height) vh = opts.height;
   const fpsV = opts.fps || P.videoFps;
-  const loops = opts.loops || P.videoLoops;
-  const duration = loops * P.loopSeconds;
-  const frameCount = opts.frameCount || Math.round(fpsV * duration);
-  const seconds = opts.frameCount ? frameCount / fpsV : duration;
+  const plan = videoPlan(opts.loops);
+  const { frameCount, seconds, tAt, VP } = videoTiming(fpsV, plan, opts.frameCount);
   const bitrate = P.videoBitrate * 1e6;
   let format = opts.format || P.videoFormat;
 
@@ -329,8 +411,8 @@ async function exportVideo(opts = {}) {
       blob = await encodeVideo({
         width: vw, height: vh, fps: fpsV, frameCount,
         renderFrame: async (i) => {
-          // frame i at t = i/fps (never t = duration), so the file loops seamlessly
-          renderer.draw({ P, t: wrapT(i / fpsV), w: vw, h: vh, ss: P.videoSS });
+          // frame i at tAt(i) (never the loop end), so the file loops seamlessly
+          renderer.draw({ P: VP, t: tAt(i), w: vw, h: vh, ss: P.videoSS });
           return renderer.canvas;
         },
         bitrate, container: 'auto',
@@ -353,7 +435,7 @@ async function exportVideo(opts = {}) {
       const res = await exportFrameSequence({
         fps: fpsV, frameCount, name: stem, dirHandle,
         renderFrame: async (i) => {
-          renderer.draw({ P, t: wrapT(i / fpsV), w: vw, h: vh, ss: P.videoSS });
+          renderer.draw({ P: VP, t: tAt(i), w: vw, h: vh, ss: P.videoSS });
           return renderer.canvas; // encoded right after this returns, same task, buffer preserved
         },
         ffmpegOut: `${stem}.mp4`,
@@ -374,7 +456,7 @@ async function exportVideo(opts = {}) {
       const ms = [];
       for (let i = 0; i < 5; i++) {
         const c0 = performance.now();
-        drawAndSync(i, fpsV, vw, vh);
+        drawAndSync(i, tAt, VP, vw, vh);
         ms.push(performance.now() - c0);
         await new Promise((r) => setTimeout(r, 0));
       }
@@ -388,7 +470,7 @@ async function exportVideo(opts = {}) {
       blob = await recordCanvasFrames({
         canvas: renderer.canvas, frameCount, slotMs, bitrate,
         mimeType: sup.webmMime || undefined,
-        renderFrame: (i) => { renderer.draw({ P, t: wrapT(i / fpsV), w: vw, h: vh, ss: P.videoSS }); },
+        renderFrame: (i) => { renderer.draw({ P: VP, t: tAt(i), w: vw, h: vh, ss: P.videoSS }); },
         filename: opts.noDownload ? undefined : filename,
         signal: abortCtl.signal,
         onProgress: ({ frame, total }) => {
@@ -403,10 +485,15 @@ async function exportVideo(opts = {}) {
       // real-time: the canvas is animated here while MediaRecorder captures it
       let stop = false;
       const rtStart = performance.now();
-      renderer.draw({ P, t: 0, w: vw, h: vh, ss: P.videoSS });
+      // same plan as the offline paths (speed, loop period, flow); wall-clock time instead of frame index
+      const rtSpeed = plan.speed;
+      const rtL = VP.loopSeconds;
+      const rtT0 = rtSpeed ? 0 : P.time;
+      renderer.draw({ P: VP, t: rtT0, w: vw, h: vh, ss: P.videoSS });
       const tick = () => {
         if (stop) return;
-        renderer.draw({ P, t: wrapT((performance.now() - rtStart) / 1000), w: vw, h: vh, ss: P.videoSS });
+        const t = rtT0 + (rtSpeed * (performance.now() - rtStart)) / 1000;
+        renderer.draw({ P: VP, t: ((t % rtL) + rtL) % rtL, w: vw, h: vh, ss: P.videoSS });
         requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick);
@@ -478,8 +565,13 @@ function randomizeParams() {
     creaseSoft: r2(rnd(0.1, 0.6)),
     creaseAsym: r2(rnd(0.3, 1.0)),
     sweep: r2(rnd(0.3, 1.2)),
-    stretch: r2(rnd(0.0, 0.6)),
+    elongation: r2(rnd(0.05, 0.45)),
+    stretch: pick([0, 0, r2(rnd(0, 0.4))]),
     angle: rndInt(-180, 180),
+    driftAngle: rndInt(30, 80),
+    drift: r2(rnd(0.085, 0.14)),
+    detailSpeed: r2(rnd(1.0, 1.3)),
+    flow: r2(rnd(0.7, 1.4)),
     zoom: r2(rnd(0.9, 1.3)),
     offsetX: r2(rnd(-0.5, 0.5)),
     offsetY: r2(rnd(-0.5, 0.5)),
@@ -510,7 +602,7 @@ function applyPreset(name) {
 function resetParams() {
   const keep = {
     paper: P.paper, orientation: P.orientation, dpi: P.dpi, customW: P.customW, customH: P.customH, stillSS: P.stillSS,
-    videoSize: P.videoSize, videoFps: P.videoFps, videoLoops: P.videoLoops, videoBitrate: P.videoBitrate,
+    videoSize: P.videoSize, videoFps: P.videoFps, videoLength: P.videoLength, videoFit: P.videoFit, videoBitrate: P.videoBitrate,
     videoFormat: P.videoFormat, videoSS: P.videoSS, view: P.view, seed: P.seed, time: 0, playing: P.playing,
   };
   Object.assign(P, DEFAULTS, keep);
@@ -548,6 +640,7 @@ fField.addBinding(P, 'crease', { label: 'crease (fold)', min: 0, max: 1, step: 0
 fField.addBinding(P, 'creaseSoft', { label: 'crease softness', min: 0, max: 1, step: 0.01 });
 fField.addBinding(P, 'creaseAsym', { label: 'crease one-sided', min: 0, max: 1, step: 0.01 });
 fField.addBinding(P, 'sweep', { min: 0, max: 2, step: 0.01 });
+fField.addBinding(P, 'elongation', { min: 0, max: 2, step: 0.01 });
 fField.addBinding(P, 'stretch', { min: 0, max: 1, step: 0.01 });
 fField.addBinding(P, 'angle', { min: -180, max: 180, step: 1 });
 fField.addBinding(P, 'zoom', { min: 0.4, max: 4, step: 0.01 });
@@ -592,7 +685,11 @@ makeTimeBinding();
 fMotion.addBinding(P, 'speed', { min: 0, max: 4, step: 0.01 });
 fMotion.addBinding(P, 'fixedStep', { label: 'frame-exact (slow-mo)' });
 fMotion.addBinding(P, 'loopSeconds', { label: 'loop seconds', min: 4, max: 120, step: 1 });
-fMotion.addBinding(P, 'flow', { min: 0, max: 3, step: 0.01 });
+fMotion.addBinding(P, 'driftAngle', { label: 'drift angle', min: -180, max: 180, step: 1 });
+fMotion.addBinding(P, 'drift', { label: 'drift (short side/s)', min: 0, max: 0.6, step: 0.005 });
+fMotion.addBinding(P, 'detailSpeed', { label: 'detail speed-up', min: 0.5, max: 2.5, step: 0.01 });
+fMotion.addBinding(P, 'flow', { label: 'churn', min: 0, max: 3, step: 0.01 });
+fMotion.addBinding(info, 'drift', { readonly: true, label: 'drift', multiline: true, rows: 2 });
 fMotion.addBinding(P, 'previewScale', { label: 'preview scale', min: 0.25, max: 1, step: 0.05 });
 fMotion.addBinding(P, 'frame', { label: 'preview frame', options: { 'paper aspect': 'paper', 'video aspect': 'video' } });
 
@@ -623,7 +720,13 @@ fVid.addBinding(P, 'videoSize', { label: 'size', options: {
   '1920×1080 (16:9)': '1920x1080', '3840×2160 (4K)': '3840x2160',
 } });
 fVid.addBinding(P, 'videoFps', { label: 'fps', options: { '24': 24, '30': 30, '60': 60 } });
-fVid.addBinding(P, 'videoLoops', { label: 'loops', min: 1, max: 8, step: 1 });
+fVid.addBinding(P, 'videoLength', { label: 'length s', min: 2, max: 300, step: 1 });
+fVid.addBinding(P, 'videoFit', { label: 'fit', options: {
+  'exact length, keep speed (resize loop)': 'loop',
+  'keep speed + loop (whole loops, ≈ length)': 'loops',
+  'exact length, keep loop (nudge speed)': 'exact',
+} });
+fVid.addBinding(info, 'plan', { label: 'loops', readonly: true });
 fVid.addBinding(P, 'videoBitrate', { label: 'bitrate Mbps', min: 2, max: 80, step: 1 });
 fVid.addBinding(P, 'videoFormat', { label: 'format', options: {
   'MP4 (offline, frame-exact)': 'mp4', 'WebM (real-time, may drop frames)': 'webm',

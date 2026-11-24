@@ -105,6 +105,7 @@
         `t=0 vs t=loop/2 (expect large): ${diff(a0, aH)}`,
         `|grad h| / ref: p10 ${pct(0.1)} p50 ${pct(0.5)} p90 ${pct(0.9)} p99 ${pct(0.99)} · mean luma ${lum.toFixed(1)}`,
         `frame ms (${w}x${h}, ss ${ss}): ${times.map((x) => x.toFixed(0)).join(' ')}`,
+        `drift boost (1 = as asked): ${renderer.driftBoost.toFixed(2)}`,
         `renderer: ${gl.getParameter(gl.RENDERER)}`,
       ].join('\n');
     }

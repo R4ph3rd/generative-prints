@@ -15,7 +15,7 @@ export function paletteColors(key, seed = 1) {
 
 // Look params get these values unless a preset says otherwise.
 export const DEFAULTS = {
-  seed: 90,
+  seed: 12,
   // field
   scale: 1.1,             // noise cells per short side (x 0.44)
   warp: 1.4,              // k in f(p + k fbm(p + k fbm(p)))
@@ -25,8 +25,9 @@ export const DEFAULTS = {
   creaseSoft: 0.25,       // width of the crease fold (smaller = crisper)
   creaseAsym: 0.7,        // 0 = symmetric ridge fold, 1 = one-sided drape fold
   sweep: 0.8,             // linear slope of the thickness: long S-folds instead of closed rings
-  stretch: 0.4,           // anisotropy along angle
-  angle: 115,
+  elongation: 0.2,        // stretch the forms along the drift direction (drips)
+  stretch: 0,             // extra anisotropy along angle
+  angle: 0,
   zoom: 1.0,
   offsetX: 0,
   offsetY: 0,
@@ -47,8 +48,11 @@ export const DEFAULTS = {
   // motion
   speed: 1.0,
   fixedStep: false,
-  loopSeconds: 20,
-  flow: 1.0,
+  loopSeconds: 30,
+  driftAngle: 55,         // drift direction, deg clockwise from screen +x (45 = towards bottom-right)
+  drift: 0.085,           // drift speed, short sides per second of sketch time
+  detailSpeed: 1.1,       // each finer octave drifts this much faster (drips run ahead of the big folds)
+  flow: 1.0,              // churn: the local wobble (loop-circle morphing) on top of the drift (0 = pure drift)
   time: 0,
   playing: true,
   previewScale: 0.75,
@@ -63,7 +67,8 @@ export const DEFAULTS = {
   // video export
   videoSize: '1080x1920',
   videoFps: 30,
-  videoLoops: 1,
+  videoLength: 30,          // target video length, seconds (see videoFit)
+  videoFit: 'loop',         // 'loop': exact length + speed (export loop period resized) · 'loops': keep speed+loop, ≈ length · 'exact': nudge speed
   videoBitrate: 30,
   videoFormat: 'mp4',
   videoSS: 2,
@@ -75,14 +80,14 @@ export const DEFAULTS = {
 export const NON_LOOK_KEYS = new Set([
   'seed', 'speed', 'fixedStep', 'loopSeconds', 'time', 'playing', 'previewScale', 'frame',
   'paper', 'orientation', 'dpi', 'customW', 'customH', 'stillSS',
-  'videoSize', 'videoFps', 'videoLoops', 'videoBitrate', 'videoFormat', 'videoSS', 'view',
+  'videoSize', 'videoFps', 'videoLength', 'videoFit', 'videoBitrate', 'videoFormat', 'videoSS', 'view',
 ]);
 
 // One-click looks: DEFAULTS (look keys) + these overrides + the palette colours.
 export const PRESETS = {
   'Oil slick': {},
   'Silk folds': {
-    warp: 1.3, warpIterations: 2, crease: 1.0, creaseSoft: 0.12, creaseAsym: 1.0, sweep: 1.0, stretch: 0.5, angle: 110, rampFreq: 1.7,
+    warp: 1.1, warpIterations: 2, crease: 1.0, creaseSoft: 0.12, creaseAsym: 1.0, sweep: 1.0, elongation: 0.2, driftAngle: 60, rampFreq: 1.7,
     plateau: 0.25, gradInfluence: 0.75, gloss: 0.15,
   },
   'Soft holo': {
@@ -94,7 +99,7 @@ export const PRESETS = {
     gradInfluence: 0.7, gloss: 0.1, saturation: 1.0,
   },
   'Aurora drift': {
-    palette: 'aurora', scale: 1.1, warp: 1.4, stretch: 0.6, angle: 85, rampFreq: 1.5, plateau: 0.3, gloss: 0.08,
+    palette: 'aurora', scale: 1.1, warp: 1.4, elongation: 0.3, driftAngle: 75, drift: 0.09, flow: 1.2, rampFreq: 1.5, plateau: 0.3, gloss: 0.08,
     saturation: 1.0,
   },
 };

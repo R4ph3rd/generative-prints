@@ -12,8 +12,9 @@
 //   p = ((pixel + 0.5) - full / 2) / min(fullW, fullH), y up.
 //
 // Per sample:
-//   1. camera (zoom / pan / scale) and an anisotropic squash along P.angle
-//      (P.stretch) map p to field space x.
+//   1. camera (zoom / pan / scale), an elongation along the drift direction
+//      (P.elongation) and an extra anisotropic squash along P.angle (P.stretch) map p
+//      to field space x.
 //   2. nested warp, P.warpIterations levels: w0 = 0, w_{l+1} = fbm2_l(x + k w_l), the
 //      innermost level folded w -> mix(w, 2 (|w|_soft - c), P.crease) so its zero
 //      curves become creases. thickness h = fbm(x + k w_L).
@@ -21,8 +22,20 @@
 //      sign flip, so creases stay bright instead of picking up dark hairlines. Every noise call returns
 //      an exact analytic gradient and the Jacobians are chained, so |grad h| (per
 //      short side) is exact: no dFdx, identical across tiles, crops and supersampling.
-//      Motion: every octave samples 3D simplex noise along a loop-periodic circle
-//      (radius ~ P.flow), so t and t + loopSeconds are bit-identical.
+//      Motion (drift): every noise octave of every field is made PERIODIC along the
+//      drift axis by wrapping that axis onto a cylinder in the 3D noise volume:
+//        n(u, v) = snoise(R cos(u/R - phi), R sin(u/R - phi), v),  R = period / 2 pi
+//      (u along the drift axis in that octave's frame, v across it; arc length = u, so
+//      the scale stays isotropic). phi advances by an INTEGER number of turns per loop,
+//      so each layer slides k whole periods per loop and t, t + loopSeconds are
+//      bit-identical. The thickness field's periods are >= 1.2x the frame's extent
+//      along the drift (no visible repetition); the warp fields, which only displace it,
+//      may use 0.6x and drift at ~0.55-0.65 of its speed. Finer octaves run faster by
+//      P.detailSpeed^i. The drift is a gentle overall fall: the surface slides, the folds lag.
+//      Churn (P.flow): the pre-drift wobble, the dominant local motion: per octave a
+//      loop-periodic circle, in the plane (shifts u, v along a random direction) and out
+//      of it (the cylinder radius, i.e. off the sheet), integer cycles per loop.
+//      Gradients stay exact by the chain rule (d/du = (r/R)(-g.x sin + g.y cos), d/dv = g.z).
 //   3. colour: s = h * rampFreq + rampPhase; inside each cycle the first `plateau`
 //      fraction holds colour 0 (the dark film), the rest runs through the cyclic
 //      ramp c0 -> c1 -> ... -> c(n-1) -> c0 (closed Catmull-Rom spline in sRGB: no hard bands).
@@ -56,7 +69,9 @@ uniform mat2 uCam;         // p -> field space (zoom, scale, stretch, angle)
 uniform vec2 uCamOff;      // field-space offset (pan)
 uniform vec4 uFbm[${N_FBM}];  // per noise field: offset xy, circle phase (turns), circle direction (turns)
 uniform float uTheta;      // 2 pi * loop phase
-uniform float uFlowR;      // circle radius, noise units
+uniform float uFlowR;      // churn circle radius, noise units
+uniform vec2 uDirO[6];     // drift direction (unit) in each octave's frame
+uniform vec2 uDrift[${N_FBM * 6}];  // per field j, octave i: (cylinder radius R, phase phi) in octave units
 uniform int uIter;         // warp levels
 uniform int uOct;          // octaves
 uniform int uWOct;         // octaves of the warp fields
@@ -157,7 +172,7 @@ const float TAU = 6.28318530718;
 // octave rotation (~36.9 deg) times lacunarity 2.03
 const mat2 OCT = mat2(0.8, 0.6, -0.6, 0.8) * 2.03;
 
-// loop-periodic fbm j at point x -> (value, d/dx, d/dy), value ~ [-1, 1]
+// loop-periodic drifting fbm j at point x -> (value, d/dx, d/dy), value ~ [-1, 1]
 vec3 fbm(vec2 x, int j, int oct, float gain) {
   vec4 F = uFbm[j];
   vec2 y = x + F.xy;
@@ -167,15 +182,26 @@ vec3 fbm(vec2 x, int j, int oct, float gain) {
   for (int i = 0; i < 6; i++) {
     if (i >= oct) break;
     float fi = float(i);
-    // loop-periodic circle through the noise volume: integer cycles per loop
+    vec2 e = uDirO[i], pe = vec2(-e.y, e.x);
+    vec2 D = uDrift[j * 6 + i];
+    // churn (the pre-drift wobble, unchanged): a loop-periodic circle per octave, in the
+    // plane along direction dA and out of it. In-plane it shifts (u, v) (a shift in u
+    // keeps the period); out of plane it moves the cylinder radius, i.e. off the sheet,
+    // the cylinder's stand-in for the old z offset. Integer cycles per loop.
     float cyc = i < 2 ? 1.0 : 2.0;
     float an = cyc * uTheta + TAU * (F.z + 0.618 * fi);
     float dA = TAU * F.w + 2.4 * fi;
-    float R = uFlowR / (1.0 + 0.5 * fi);
-    vec3 sp = vec3(y + R * cos(an) * vec2(cos(dA), sin(dA)), R * sin(an) + 3.7 * fi);
+    float Rc = uFlowR / (1.0 + 0.5 * fi);
+    vec2 wob = Rc * cos(an) * vec2(cos(dA), sin(dA));
+    float r = D.x + Rc * sin(an);
+    float th = (dot(y, e) + wob.x) / D.x - D.y;   // u / R - phi
+    float ct = cos(th), st = sin(th);
+    vec3 sp = vec3(r * ct, r * st, dot(y, pe) + wob.y + 3.7 * fi + TAU * F.w);
     vec4 n = snoiseD(sp);
+    float du = (r / D.x) * (-n.y * st + n.z * ct);
+    vec2 gq = du * e + n.w * pe;
     s += a * n.x;
-    g += a * (transpose(M) * n.yz);
+    g += a * (transpose(M) * gq);
     an_ += a;
     y = OCT * y + vec2(1.7, -3.1);
     M = OCT * M;
@@ -378,6 +404,94 @@ function catmull(cols, v) {
     + (2 * p0[k] - 5 * p1[k] + 4 * p2[k] - p3[k]) * f2 + (3 * p1[k] - p0[k] + p3[k] - 3 * p2[k]) * f3))));
 }
 
+/** Camera: p (normalized, y up) -> field space, as a row-major 2x2 plus the pieces the pan and drift need. */
+function cameraMatrix(P) {
+  // camera: p -> field space (BASE_FREQ noise cells per short side at scale 1)
+  const zoom = clamp(num(P.zoom, 1), 0.05, 50);
+  const scale = clamp(num(P.scale, 1), 0.05, 20);
+  const kf = BASE_FREQ * scale;
+  const k = kf / zoom;
+  const stretch = clamp(num(P.stretch, 0), 0, 1);
+  const ang = num(P.angle, 0) * DEG;
+  const ca = Math.cos(ang), sa = Math.sin(ang);
+  // rotate into the stretch frame (x' along angle), squash frequency along it
+  const sx = 1 - 0.72 * stretch, sy = 1 + 0.25 * stretch;
+  const Cm = [sx * ca * k, sx * sa * k, -sy * sa * k, sy * ca * k]; // row-major
+  // drift direction on screen: driftAngle clockwise from +x with screen y down, so in
+  // p (y up) it is (cos, -sin); 45 deg = towards the bottom-right
+  const da = num(P.driftAngle, 55) * DEG;
+  const vx = Math.cos(da), vy = -Math.sin(da);
+  // elongation along the drift: squash the frequency along v (features stretch along it)
+  const el = 1 / (1 + 2 * clamp(num(P.elongation, 0.5), 0, 3));
+  const E = [1 + (el - 1) * vx * vx, (el - 1) * vx * vy, (el - 1) * vx * vy, 1 + (el - 1) * vy * vy];
+  const A = [Cm[0] * E[0] + Cm[1] * E[2], Cm[0] * E[1] + Cm[1] * E[3], Cm[2] * E[0] + Cm[3] * E[2], Cm[2] * E[1] + Cm[3] * E[3]];
+  return { A, k, kf, sx, sy, ca, sa, vx, vy };
+}
+
+/**
+ * Drift layout: for every noise field j and octave i, the cylinder radius (period / 2 pi,
+ * octave units) and the phase at loop phase tau, written into DR; the octave-frame drift
+ * directions into DO. aw, ah: image extent in normalized units (short side = 1).
+ * Each layer travels a whole number k >= 1 of periods per loop; the period is at least
+ * 1.2x (thickness field) or 0.6x (warp fields) the frame extent along the drift. When
+ * drift * loop is too short for that, the layer travels one minimal period per loop
+ * instead (faster than asked).
+ * @returns {number} speed-up of the slowest layers (1 = drift exactly as asked)
+ */
+function driftLayout(P, A, vx, vy, aw, ah, loop, ph, tau, DO, DR) {
+  // drift: field-space direction of the screen drift, frame extent along it
+  const wx = A[0] * vx + A[1] * vy, wy = A[2] * vx + A[3] * vy;
+  const wl = Math.hypot(wx, wy) || 1;
+  const ex = wx / wl, ey = wy / wl;
+  const hx = aw / 2, hy = ah / 2;
+  const ext = 2 * (Math.abs((A[0] * ex + A[2] * ey) * hx) + Math.abs((A[1] * ex + A[3] * ey) * hy)); // field units
+  // the thickness field must not repeat inside the frame (period >= 1.2x the extent); the
+  // warp fields only displace it, and a repeat in a displacement is not visible, so they
+  // may use shorter periods. That lets the warp fields drift slower than the base.
+  const PminBase = 1.2 * ext, PminWarp = 0.6 * ext;
+  const drift = Math.max(0, num(P.drift, 0.1));        // short sides per second
+  const travel = wl * drift * loop;                      // field units per loop at speed x1
+  const detail = clamp(num(P.detailSpeed, 1.35), 0.25, 4);
+  let boost = 1;
+  // octave frames: OCT = rotation(0.8, 0.6) * 2.03 applied i times
+  let rx = ex, ry = ey;
+  for (let i = 0; i < 6; i++) {
+    DO[i * 2] = rx; DO[i * 2 + 1] = ry;
+    [rx, ry] = [0.8 * rx - 0.6 * ry, 0.6 * rx + 0.8 * ry];
+  }
+  for (let j = 0; j < N_FBM; j++) {
+    // warp levels slower than the thickness, a little per-field variety
+    // warp fields drift slower than the thickness field: the surface slides, the folds lag
+    const lvl = j === 6 ? 1 : 0.55 + 0.05 * Math.floor(j / 2);
+    const Pmin = j === 6 ? PminBase : PminWarp;
+    const jit = 0.95 + 0.1 * ph[(9 + 3 * j) % 32];
+    for (let i = 0; i < 6; i++) {
+      const D = travel * lvl * jit * Math.pow(detail, i);  // wanted travel per loop, field units
+      let kk = Math.floor(D / Pmin), Pu;
+      if (drift <= 0) { kk = 0; Pu = Pmin; }
+      else if (kk < 1) {
+        // loop too short / drift too slow for one whole period: travel one minimal
+        // period per loop (faster than asked) so nothing repeats inside the frame
+        kk = 1; Pu = Pmin;
+        if (i === 0) boost = Math.max(boost, Pmin / D);
+      } else Pu = D / kk;
+      const sc8 = Math.pow(2.03, i);                     // field -> octave units
+      DR[(j * 6 + i) * 2] = (Pu * sc8) / (2 * Math.PI);   // cylinder radius
+      let f = kk * tau; f -= Math.floor(f);
+      DR[(j * 6 + i) * 2 + 1] = 2 * Math.PI * f;          // phase
+    }
+  }
+  return boost;
+}
+
+/** Speed-up factor driftLayout applies for these params / image aspect (1 = as asked). */
+export function driftBoostFor(P, fullW, fullH, phases) {
+  const S = Math.min(fullW, fullH);
+  const { A, vx, vy } = cameraMatrix(P);
+  const loop = Math.max(1e-3, num(P.loopSeconds, 30));
+  return driftLayout(P, A, vx, vy, fullW / S, fullH / S, loop, phases, 0, new Float32Array(12), new Float32Array(N_FBM * 12));
+}
+
 export class OilRenderer {
   constructor() {
     this.canvas = document.createElement('canvas');
@@ -407,6 +521,9 @@ export class OilRenderer {
 
     this.colBuf = new Float32Array(MAX_COLORS * 3);
     this.fbmBuf = new Float32Array(N_FBM * 4);
+    this.dirBuf = new Float32Array(6 * 2);
+    this.driftBuf = new Float32Array(N_FBM * 6 * 2);
+    this.driftBoost = 1;
     this.out = null; // { tex, fbo, w, h } RGBA8 for renderRegion
     this.scene = null;
     this._colKey = '';
@@ -525,18 +642,8 @@ export class OilRenderer {
     gl.uniform1i(U.uSS, ss);
     gl.uniform2f(U.uHalfExt, job.fullW / S / 2, job.fullH / S / 2);
 
-    // camera: p -> field space (BASE_FREQ noise cells per short side at scale 1)
-    const zoom = clamp(num(P.zoom, 1), 0.05, 50);
-    const scale = clamp(num(P.scale, 1), 0.05, 20);
-    const kf = BASE_FREQ * scale;
-    const k = kf / zoom;
-    const stretch = clamp(num(P.stretch, 0.35), 0, 1);
-    const ang = num(P.angle, 70) * DEG;
-    const ca = Math.cos(ang), sa = Math.sin(ang);
-    // rotate into the stretch frame (x' along angle), squash frequency along it
-    const sx = 1 - 0.72 * stretch, sy = 1 + 0.25 * stretch;
-    const m00 = sx * ca * k, m01 = sx * sa * k, m10 = -sy * sa * k, m11 = sy * ca * k;
-    gl.uniformMatrix2fv(U.uCam, false, new Float32Array([m00, m10, m01, m11]));
+    const { A, k, kf, sx, sy, ca, sa, vx, vy } = cameraMatrix(P);
+    gl.uniformMatrix2fv(U.uCam, false, new Float32Array([A[0], A[2], A[1], A[3]]));
     const ox = num(P.offsetX, 0) * kf, oy = num(P.offsetY, 0) * kf;
     gl.uniform2f(U.uCamOff, sx * (ca * ox + sa * oy), sy * (-sa * ox + ca * oy));
 
@@ -549,7 +656,14 @@ export class OilRenderer {
     }
     gl.uniform4fv(U.uFbm, F);
     gl.uniform1f(U.uTheta, 2 * Math.PI * tau);
-    gl.uniform1f(U.uFlowR, 0.05 * clamp(num(P.flow, 1), 0, 3));
+    gl.uniform1f(U.uFlowR, 0.05 * clamp(num(P.flow, 0.4), 0, 3));
+
+    const DO = this.dirBuf, DR = this.driftBuf;
+    const boost = driftLayout(P, A, vx, vy, job.fullW / S, job.fullH / S, loop, ph, tau, DO, DR);
+    gl.uniform2fv(U.uDirO, DO);
+    gl.uniform2fv(U.uDrift, DR);
+    // the slowest (octave 0) layers were sped up by up to this factor (1 = as asked); read by the UI
+    this.driftBoost = boost;
 
     const iter = clamp(Math.round(num(P.warpIterations, 2)), 1, 3);
     gl.uniform1i(U.uIter, iter);
